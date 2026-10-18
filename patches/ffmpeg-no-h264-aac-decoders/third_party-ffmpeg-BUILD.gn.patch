@@ -1,0 +1,79 @@
+Reason: Notolibra decodes H.264 and AAC with the operating system and ships no
+decoder of its own (plan.md §3.2-§3.3). Chromium asserts that
+proprietary_codecs needs Chrome-branded FFmpeg (media/BUILD.gn), so we build
+Chrome branding, which keeps the H.264/AAC parsers and the ADTS demuxer, and
+drop the two decoders' sources with a new GN arg,
+ffmpeg_drop_h264_aac_decoders (default false: upstream unchanged). This is
+Vivaldi's arrangement, written fresh (Vivaldi edits codec_list.c from its own
+platform_media/ffmpeg/BUILD.gn; nothing of Vivaldi's is used).
+This file is Chromium's own build file (BSD-3).
+No upstream bug.
+Repo: third_party/ffmpeg
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 4e2e57a..ae47694 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -232,6 +232,62 @@ if (os_config == "linux-noasm") {
+   ffmpeg_gas_sources = []
+ }
+ 
++declare_args() {
++  # Build Chrome-branded FFmpeg without its H.264 and AAC decoders, keeping the
++  # parsers and the ADTS demuxer that Chrome branding adds. For embedders that
++  # decode H.264 and AAC with the operating system. The matching codec_list.c
++  # entries are removed from the Chrome configuration as well.
++  ffmpeg_drop_h264_aac_decoders = false
++}
++
++if (ffmpeg_drop_h264_aac_decoders) {
++  assert(ffmpeg_branding == "Chrome",
++         "ffmpeg_drop_h264_aac_decoders applies to Chrome branding")
++  _decoder_only_c_sources = [
++    # H.264 decoder. h264_parse.c, h264_ps.c, h264_sei.c and h264_parser.c
++    # stay, and so do h264dsp and h264idct, which the parser uses.
++    "libavcodec/h264_cabac.c",
++    "libavcodec/h264_cavlc.c",
++    "libavcodec/h264_direct.c",
++    "libavcodec/h264_loopfilter.c",
++    "libavcodec/h264_mb.c",
++    "libavcodec/h264_picture.c",
++    "libavcodec/h264_refs.c",
++    "libavcodec/h264_slice.c",
++    "libavcodec/h264dec.c",
++    "libavcodec/h264chroma.c",
++    "libavcodec/h264pred.c",
++    "libavcodec/h264qpel.c",
++    "libavcodec/*/h264chroma_init*.c",
++    "libavcodec/*/h264pred_init*.c",
++    "libavcodec/*/h264qpel_init*.c",
++
++    # AAC decoder (aac_parser.c, adts_header.c and the ADTS demuxer stay).
++    "libavcodec/aac/aacdec*.c",
++    "libavcodec/aacps_common.c",
++    "libavcodec/aacps_float.c",
++    "libavcodec/aacpsdsp_float.c",
++    "libavcodec/aacsbr.c",
++    "libavcodec/sbrdsp.c",
++    "libavcodec/*/aacpsdsp_init*.c",
++    "libavcodec/*/sbrdsp_init*.c",
++  ]
++  _decoder_only_asm_sources = [
++    "*_h264cmc_*",
++    "*_h264pred_*",
++    "*_h264qpel_*",
++    "*_aacpsdsp_*",
++    "*_sbrdsp_*",
++  ]
++  _kept_c_sources = filter_exclude(ffmpeg_c_sources, _decoder_only_c_sources)
++  _kept_asm_sources =
++      filter_exclude(ffmpeg_gas_sources, _decoder_only_asm_sources)
++  ffmpeg_c_sources = []
++  ffmpeg_c_sources = _kept_c_sources
++  ffmpeg_gas_sources = []
++  ffmpeg_gas_sources = _kept_asm_sources
++}
++
+ if (is_component_ffmpeg) {
+   link_target_type = "source_set"
+ } else {

@@ -1,0 +1,124 @@
+#!/bin/zsh
+# Build the Notolibra engine (plan.md §5.1-§5.3).
+#
+#   scripts/build [options] [targets...]        (default target: content_shell)
+#     --config dev|release_test|official        (default: dev)
+#     --jobs N                                  (default: 6, the daytime rule)
+#     --min-free-mem PCT                        stop the build if memory_pressure's
+#                                               free percentage drops below PCT (default 30)
+#     --utility                                 run under `taskpolicy -c utility`
+#     --gen-only                                write args.gn and run gn gen only
+#
+# Rules this script enforces (AGENTS.md, plan.md §5.3):
+#   * at least 50 GiB free before starting (it refuses under 60 GiB);
+#   * a memory watchdog samples memory_pressure every 20 s and stops the build
+#     (SIGINT to the build's own process group only) below --min-free-mem; the
+#     build resumes incrementally when re-run;
+#   * logs go to out/<Config>/logs/ and are zstd-compressed when large.
+set -uo pipefail
+ENGINE=${0:A:h:h}
+SRC=${ENGINE:h}
+export PATH="$HOME/depot_tools:$PATH" DEPOT_TOOLS_METRICS=0
+
+config=dev jobs=6 min_free=30 utility=0 gen_only=0
+targets=()
+while (( $# )); do
+  case $1 in
+    --config) config=$2; shift 2 ;;
+    --jobs) jobs=$2; shift 2 ;;
+    --min-free-mem) min_free=$2; shift 2 ;;
+    --utility) utility=1; shift ;;
+    --gen-only) gen_only=1; shift ;;
+    -h|--help) sed -n '2,20p' $0; exit 0 ;;
+    *) targets+=$1; shift ;;
+  esac
+done
+(( ${#targets} )) || targets=(content_shell)
+
+case $config in
+  dev) out=out/Dev ;;
+  release_test) out=out/ReleaseTest ;;
+  official) out=out/Official ;;
+  *) echo "unknown config $config"; exit 2 ;;
+esac
+
+cd "$SRC" || exit 1
+[[ -f .gn ]] || { echo "error: $SRC is not a Chromium src checkout"; exit 1; }
+
+free_gib=$(df -g . | awk 'NR==2 {print $4}')
+if (( free_gib < 60 )); then
+  echo "error: ${free_gib} GiB free; AGENTS.md's floor is 50 GiB"; exit 1
+fi
+
+mkdir -p $out/logs
+
+# Without full Xcode, build against the Command Line Tools (scripts/clt-xcode,
+# docs/xcode.md).
+clt=0
+if ! xcodebuild -version >/dev/null 2>&1; then
+  clt=1
+  "$ENGINE/scripts/clt-xcode" check || exit 1
+fi
+
+# args.gn: the managed lines are rewritten on every run; anything after the
+# "Local overrides" marker is kept.
+local_args=""
+[[ -f $out/args.gn ]] && local_args=$(sed -n '/^# Local overrides below this line./,$p' $out/args.gn | tail -n +2)
+{
+  echo "import(\"//notolibra/build/args/$config.gn\")"
+  (( clt )) && echo 'import("//notolibra/build/args/clt.gn")'
+  if command -v ccache >/dev/null; then
+    echo 'cc_wrapper = "env CCACHE_SLOPPINESS=time_macros ccache"'
+  fi
+  echo '# Local overrides below this line.'
+  [[ -n $local_args ]] && echo "$local_args"
+} > $out/args.gn.new
+cmp -s $out/args.gn.new $out/args.gn 2>/dev/null && rm $out/args.gn.new || mv $out/args.gn.new $out/args.gn
+
+ts=$(date +%Y%m%d-%H%M%S)
+log=$out/logs/build-$ts.log
+mem=$out/logs/mem-$ts.csv
+
+gn gen $out 2>&1 | tee $log
+(( ${pipestatus[1]} == 0 )) || { echo "gn gen failed; see $log"; exit 1; }
+(( gen_only )) && exit 0
+
+cmd=(autoninja -C $out -j $jobs $targets)
+(( utility )) && cmd=(taskpolicy -c utility $cmd)
+
+echo "== $(date) building ${targets[*]} in $out at -j $jobs (stop below ${min_free}% free memory)" | tee -a $log
+start=$(date +%s)
+# The build runs in its own session (and process group, pgid == pid), so the
+# watchdog can stop it without touching any other process.
+python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
+  /usr/bin/time -l $cmd >> $log 2>&1 &
+build_pid=$!
+
+echo "epoch,free_pct,disk_free_gib" > $mem
+stopped=0
+while kill -0 $build_pid 2>/dev/null; do
+  pct=$(memory_pressure 2>/dev/null | awk -F': ' '/free percentage/ {gsub("%","",$2); print $2}')
+  disk=$(df -g . | awk 'NR==2 {print $4}')
+  echo "$(date +%s),$pct,$disk" >> $mem
+  if [[ -n $pct ]] && (( pct < min_free )); then
+    echo "== $(date) free memory ${pct}% < ${min_free}%: stopping the build" | tee -a $log
+    kill -INT -- -$build_pid 2>/dev/null
+    stopped=1
+  fi
+  if (( disk < 50 )); then
+    echo "== $(date) disk free ${disk} GiB < 50 GiB: stopping the build" | tee -a $log
+    kill -INT -- -$build_pid 2>/dev/null
+    stopped=1
+  fi
+  sleep 20
+done
+wait $build_pid
+rc=$?
+end=$(date +%s)
+echo "== $(date) exit $rc after $(( (end - start) / 60 )) min (stopped by watchdog: $stopped)" | tee -a $log
+tail -25 $log
+
+if (( $(stat -f %z $log) > 2000000 )); then
+  zstd -q --rm -19 $log && echo "log compressed to $log.zst"
+fi
+exit $rc

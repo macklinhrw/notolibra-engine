@@ -1,0 +1,11 @@
+# Building without Xcode.app, with only the Command Line Tools (see
+# scripts/clt-xcode and docs/xcode.md). scripts/build imports this when
+# `xcodebuild -version` fails. Remove once full Xcode is installed.
+
+# Use the "hermetic Xcode" directory scripts/clt-xcode builds from the
+# Command Line Tools (src/build/mac_files/xcode_binaries).
+use_system_xcode = false
+
+# The Command Line Tools have no Metal toolchain; ANGLE compiles its internal
+# shaders at run time instead (patches/clt-build/).
+angle_metal_build_time_internal_shaders = false

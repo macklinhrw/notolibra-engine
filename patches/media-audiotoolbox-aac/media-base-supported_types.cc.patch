@@ -1,0 +1,32 @@
+Reason: canPlayType/isTypeSupported report AAC on macOS only if the GPU
+process's AudioToolbox decoder supports the profile, instead of assuming
+FFmpeg decodes it (plan.md §3.3: "so canPlayType is honest"). No upstream bug.
+
+diff --git a/media/base/supported_types.cc b/media/base/supported_types.cc
+index efc7246c8c..0c1ba1a472 100644
+--- a/media/base/supported_types.cc
++++ b/media/base/supported_types.cc
+@@ -294,15 +294,22 @@ bool IsDecoderAV1Supported(const VideoType& type) {
+ }
+ 
+ bool IsDecoderAACSupported(const AudioType& type) {
++#if BUILDFLAG(ENABLE_MOJO_AUDIO_DECODER) && BUILDFLAG(IS_MAC)
++  // FFmpeg has no AAC decoder in this build: every AAC profile is decoded by
++  // AudioToolbox in the GPU process, so report what that process supports.
++  // RenderMediaClient waits for the GPU process's list before answering.
++  return GetSupplementalDecoderAudioTypeCache()->IsProfileSupported(type);
++#else
+   if (type.profile != AudioCodecProfile::kXHE_AAC) {
+     return true;
+   }
+ #if BUILDFLAG(ENABLE_MOJO_AUDIO_DECODER) && \
+-    (BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN))
++    (BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_WIN))
+   return GetSupplementalDecoderAudioTypeCache()->IsProfileSupported(type);
+ #else
+   return false;
+ #endif
++#endif  // BUILDFLAG(ENABLE_MOJO_AUDIO_DECODER) && BUILDFLAG(IS_MAC)
+ }
+ 
+ bool IsDecoderDolbyVisionProfileSupported(const VideoType& type) {

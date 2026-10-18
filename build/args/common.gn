@@ -1,0 +1,41 @@
+# Arguments shared by every Notolibra engine configuration.
+# Imported from out/<Config>/args.gn by scripts/build; see plan.md §3.2 and §5.1
+# in the Notolibra app repository (docs/research/browser-engine/plan.md).
+
+target_os = "mac"
+target_cpu = "arm64"            # macOS v1 ships Apple silicon only
+is_chrome_branded = false
+
+# Google services we don't use or may not use (plan §1, "Not in scope").
+# safe_browsing_mode = 0 doesn't resolve upstream (gn gen: 12 unresolved
+# dependencies in //chrome tests and feedback on //components/safe_browsing).
+# It needs ungoogled-chromium's Inox patch and its 132-file follow-up (plan.md
+# §4.5). Until we take those, keep the default; with empty API keys the
+# service has no backend anyway.
+# safe_browsing_mode = 0
+google_api_key = ""
+google_default_client_id = ""
+google_default_client_secret = ""
+use_official_google_api_keys = false
+enable_reporting = false
+enable_remoting = false
+enable_mdns = false
+enable_service_discovery = false
+enable_hangout_services_extension = false
+disable_fieldtrial_testing_config = true
+
+# Media (plan §3.2): demux and parse H.264/AAC/HEVC, decode them with macOS.
+proprietary_codecs = true             # MP4/MSE H.264, AAC and HEVC demuxing and parsing
+# plan.md §3.2 wanted ffmpeg_branding = "Chromium", but Chromium asserts that
+# proprietary_codecs with Chromium-branded FFmpeg is incompatible
+# (media/BUILD.gn L89-L93 at 156.0.8078.36). So: Vivaldi's arrangement. Chrome
+# branding keeps the H.264/AAC parsers and the ADTS demuxer; our FFmpeg patches
+# (patches/ffmpeg-no-h264-aac-decoders/) remove the two decoders.
+ffmpeg_branding = "Chrome"
+ffmpeg_drop_h264_aac_decoders = true
+is_component_ffmpeg = true            # FFmpeg as its own shared library (LGPL)
+media_use_openh264 = false            # no OpenH264 compiled in
+enable_platform_hevc = true
+enable_hevc_parser_and_hw_decoder = true
+enable_mse_mpeg2ts_stream_parser = true
+enable_widevine = false               # until the Widevine licence (phase 7)

@@ -1,0 +1,7 @@
+clt-build/third_party-angle-src-libANGLE-renderer-metal-metal_backend.gni.patch
+ffmpeg-no-h264-aac-decoders/third_party-ffmpeg-BUILD.gn.patch
+ffmpeg-no-h264-aac-decoders/third_party-ffmpeg-chromium-config-Chrome-mac-arm64-libavcodec-codec_list.c.patch
+ffmpeg-no-h264-aac-decoders/third_party-ffmpeg-chromium-config-Chrome-mac-arm64-config_components.h.patch
+media-audiotoolbox-aac/media-filters-mac-audio_toolbox_audio_decoder.cc.patch
+media-audiotoolbox-aac/media-mojo-services-gpu_mojo_media_client_mac.cc.patch
+media-audiotoolbox-aac/media-base-supported_types.cc.patch

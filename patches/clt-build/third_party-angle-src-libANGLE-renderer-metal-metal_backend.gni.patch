@@ -1,0 +1,33 @@
+Reason: build macOS with only the Command Line Tools, which have no Metal
+toolchain (Xcode 26 unbundled it). Adds angle_metal_build_time_internal_shaders
+(default true, so upstream behaviour is unchanged); build/args/clt.gn sets it
+false, and ANGLE then compiles its internal shaders from source at run time
+(DisplayMtl.mm already has that path). Drop once Xcode and the Metal toolchain
+are installed. No upstream bug.
+Repo: third_party/angle
+
+diff --git a/src/libANGLE/renderer/metal/metal_backend.gni b/src/libANGLE/renderer/metal/metal_backend.gni
+index d8ab289..f4be0dc 100644
+--- a/src/libANGLE/renderer/metal/metal_backend.gni
++++ b/src/libANGLE/renderer/metal/metal_backend.gni
+@@ -92,6 +92,11 @@ declare_args() {
+   # Set to precompile internal shaders for iOS or cross-compilation.
+   # Leave empty for default behavior.
+   angle_metal_toolchain_dir = ""
++
++  # Compile the internal shaders at build time (the default). Set to false to
++  # compile them from source at run time instead, which needs no Metal
++  # toolchain: for builds with only the Command Line Tools, which have none.
++  angle_metal_build_time_internal_shaders = true
+ }
+ 
+ # We can build the ANGLE internal shaders at build-time if we have access to the
+@@ -102,7 +107,7 @@ declare_args() {
+ # precompiling the internal shaders anyway, which enables prebuilt internal
+ # shaders for iOS as well.
+ metal_internal_shader_compilation_supported =
+-    angle_has_build &&
++    angle_has_build && angle_metal_build_time_internal_shaders &&
+     (angle_metal_toolchain_dir != "" || (!is_ios && target_os == host_os))
+ 
+ metal_internal_shaders_header =

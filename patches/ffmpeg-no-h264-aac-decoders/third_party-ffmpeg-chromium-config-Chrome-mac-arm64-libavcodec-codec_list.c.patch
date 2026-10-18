@@ -1,0 +1,22 @@
+Reason: removes ff_h264_decoder and ff_aac_decoder from the Chrome-branded
+FFmpeg configuration for macOS arm64; companion to
+third_party-ffmpeg-BUILD.gn.patch, which drops their sources.
+Licence: this patch modifies FFmpeg's generated configuration, which is
+LGPL-2.1-or-later. The modified FFmpeg (libffmpeg.dylib, built as its own
+library with is_component_ffmpeg) must be offered in source form under the
+LGPL, as plan.md §3.7 notes. Add the other OS/CPU configurations when those
+ports start.
+No upstream bug.
+Repo: third_party/ffmpeg
+
+diff --git a/chromium/config/Chrome/mac/arm64/libavcodec/codec_list.c b/chromium/config/Chrome/mac/arm64/libavcodec/codec_list.c
+index fe5adb0..7d9debf 100644
+--- a/chromium/config/Chrome/mac/arm64/libavcodec/codec_list.c
++++ b/chromium/config/Chrome/mac/arm64/libavcodec/codec_list.c
+@@ -1,6 +1,4 @@
+ static const FFCodec * const codec_list[] = {
+-    &ff_h264_decoder,
+-    &ff_aac_decoder,
+     &ff_flac_decoder,
+     &ff_mp3_decoder,
+     &ff_vorbis_decoder,

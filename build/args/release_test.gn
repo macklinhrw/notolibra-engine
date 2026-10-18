@@ -1,0 +1,7 @@
+# Close to what ships, for performance and media checks (plan §5.1, "release_test").
+import("//notolibra/build/args/common.gn")
+
+is_debug = false
+is_component_build = false
+symbol_level = 1
+dcheck_always_on = false

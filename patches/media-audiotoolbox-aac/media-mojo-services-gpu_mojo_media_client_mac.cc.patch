@@ -1,0 +1,18 @@
+Reason: the GPU process advertises AAC with profile kUnknown (AAC-LC, HE-AAC)
+as well as xHE-AAC, so MojoAudioDecoder accepts it and the renderer's
+supported-types cache reports it (plan.md §3.3). No upstream bug.
+
+diff --git a/media/mojo/services/gpu_mojo_media_client_mac.cc b/media/mojo/services/gpu_mojo_media_client_mac.cc
+index 1d1ec8a5db..750e8b078a 100644
+--- a/media/mojo/services/gpu_mojo_media_client_mac.cc
++++ b/media/mojo/services/gpu_mojo_media_client_mac.cc
+@@ -33,6 +33,9 @@ class GpuMojoMediaClientMac final : public GpuMojoMediaClient {
+   GetPlatformSupportedAudioDecoderConfigs() final {
+     SupportedAudioDecoderConfigs audio_configs;
+     audio_configs.emplace_back(AudioCodec::kAAC, AudioCodecProfile::kXHE_AAC);
++    // AAC-LC and HE-AAC v1/v2 (profile kUnknown): AudioToolboxAudioDecoder
++    // decodes every AAC profile.
++    audio_configs.emplace_back(AudioCodec::kAAC, AudioCodecProfile::kUnknown);
+ #if BUILDFLAG(ENABLE_PLATFORM_AC3_EAC3_AUDIO)
+     audio_configs.emplace_back(AudioCodec::kAC3, AudioCodecProfile::kUnknown);
+     audio_configs.emplace_back(AudioCodec::kEAC3, AudioCodecProfile::kUnknown);

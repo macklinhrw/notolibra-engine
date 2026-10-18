@@ -1,0 +1,37 @@
+#!/bin/zsh
+# Sync the Chromium checkout around this repository to CHROMIUM_VERSION and
+# apply our patch series (plan.md §4.4).
+#
+#   scripts/sync            unapply patches, gclient sync to the tag, run hooks,
+#                           apply patches, run the series checks
+#   scripts/sync --nohooks  skip gclient hooks
+#
+# The engine repo must sit at <checkout>/src/notolibra.
+set -euo pipefail
+ENGINE=${0:A:h:h}
+SRC=${ENGINE:h}
+CHECKOUT=${SRC:h}
+VERSION=$(<"$ENGINE/CHROMIUM_VERSION")
+export PATH="$HOME/depot_tools:$PATH" DEPOT_TOOLS_METRICS=0
+
+[[ -f "$SRC/.gn" ]] || { echo "error: $SRC is not a Chromium src checkout"; exit 1; }
+
+# Disk floor (AGENTS.md): don't start a job that may write >1 GB under 50 GiB free.
+free_gib=$(df -g "$CHECKOUT" | awk 'NR==2 {print $4}')
+if (( free_gib < 60 )); then
+  echo "error: only ${free_gib} GiB free; the floor is 50 GiB plus room for the sync"; exit 1
+fi
+
+# Keep Chromium's own git status clean of our directory.
+grep -qx '/notolibra' "$SRC/.git/info/exclude" 2>/dev/null || echo '/notolibra' >> "$SRC/.git/info/exclude"
+
+echo "== unapplying patches"
+python3 "$ENGINE/scripts/patches.py" unapply
+
+echo "== syncing to $VERSION"
+cd "$CHECKOUT"
+gclient sync --no-history -r "src@refs/tags/$VERSION" "$@"
+
+echo "== applying patches"
+python3 "$ENGINE/scripts/patches.py" apply --keep-going
+python3 "$ENGINE/scripts/patches.py" check

@@ -1,0 +1,31 @@
+Reason: sets CONFIG_H264_DECODER and CONFIG_AAC_DECODER to 0 in the
+Chrome-branded macOS arm64 configuration, as FFmpeg's configure
+--disable-decoder=h264,aac would; libavformat/demux.c otherwise calls into
+the removed H.264 decoder. Companion to third_party-ffmpeg-BUILD.gn.patch.
+Licence: modifies FFmpeg's generated configuration (LGPL-2.1-or-later); the
+modified FFmpeg must be offered in source form under the LGPL (plan.md §3.7).
+No upstream bug.
+Repo: third_party/ffmpeg
+
+diff --git a/chromium/config/Chrome/mac/arm64/config_components.h b/chromium/config/Chrome/mac/arm64/config_components.h
+index 7168328..659da8d 100644
+--- a/chromium/config/Chrome/mac/arm64/config_components.h
++++ b/chromium/config/Chrome/mac/arm64/config_components.h
+@@ -137,7 +137,7 @@
+ #define CONFIG_H263I_DECODER 0
+ #define CONFIG_H263P_DECODER 0
+ #define CONFIG_H263_V4L2M2M_DECODER 0
+-#define CONFIG_H264_DECODER 1
++#define CONFIG_H264_DECODER 0
+ #define CONFIG_H264_V4L2M2M_DECODER 0
+ #define CONFIG_H264_MEDIACODEC_DECODER 0
+ #define CONFIG_H264_MMAL_DECODER 0
+@@ -344,7 +344,7 @@
+ #define CONFIG_ZEROCODEC_DECODER 0
+ #define CONFIG_ZLIB_DECODER 0
+ #define CONFIG_ZMBV_DECODER 0
+-#define CONFIG_AAC_DECODER 1
++#define CONFIG_AAC_DECODER 0
+ #define CONFIG_AAC_FIXED_DECODER 0
+ #define CONFIG_AAC_LATM_DECODER 0
+ #define CONFIG_AC3_DECODER 0

@@ -1,0 +1,9 @@
+# Day-to-day development build (plan §5.1, "dev").
+import("//notolibra/build/args/common.gn")
+
+is_debug = false
+is_component_build = true
+symbol_level = 1
+blink_symbol_level = 0
+v8_symbol_level = 0
+dcheck_always_on = true

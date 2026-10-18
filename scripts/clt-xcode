@@ -1,0 +1,73 @@
+#!/bin/zsh
+# Build Chromium for macOS with only the Command Line Tools (no Xcode.app).
+#
+#   scripts/clt-xcode check    create or verify the shim (idempotent)
+#   scripts/clt-xcode remove   delete the shim (and go back to system Xcode)
+#
+# What Chromium's macOS build takes from Xcode (build/xcode_binaries.yaml lists
+# the hermetic package Google's bots use): the macOS SDK, bison and gm4, and
+# the Metal toolchain (metal, metallib, air-lld) for ANGLE's internal shaders.
+# xcodebuild itself is only asked for its version (build/config/apple/
+# sdk_info.py), and find_sdk.py wants Xcode's directory layout.
+#
+# The Command Line Tools 26.6 ship the same SDK the tag's official build pins
+# (MacOSX26.5.sdk, build 25F70), plus bison and gm4, but no Metal toolchain.
+# So this script builds Chromium's "hermetic Xcode" directory,
+# src/build/mac_files/xcode_binaries (gitignored by Chromium), out of symlinks
+# into /Library/Developer/CommandLineTools, and build/args/clt.gn selects it
+# with use_system_xcode = false. ANGLE's internal Metal shaders are then
+# compiled at run time instead (patches/clt-build/, one GN arg).
+#
+# Nothing here modifies Chromium's tracked files. Remove it with `remove` once
+# full Xcode is installed; see docs/xcode.md.
+set -euo pipefail
+ENGINE=${0:A:h:h}
+SRC=${ENGINE:h}
+CLT=/Library/Developer/CommandLineTools
+SHIM=$SRC/build/mac_files/xcode_binaries
+SDK_VERSION=26.5                 # mac_sdk_official_version at the tag
+
+cmd=${1:-check}
+if [[ $cmd == remove ]]; then
+  rm -rf "$SHIM"
+  echo "removed $SHIM"
+  exit 0
+fi
+
+[[ -d $CLT/SDKs/MacOSX$SDK_VERSION.sdk ]] || {
+  echo "error: $CLT/SDKs/MacOSX$SDK_VERSION.sdk is missing (install Command Line Tools 26.6+)"
+  exit 1
+}
+
+want_build=$(sed -n 's/.*mac_sdk_official_build_version = "\(.*\)"/\1/p' "$SRC/build/config/mac/mac_sdk.gni")
+have_build=$(/usr/libexec/PlistBuddy -c 'Print ProductBuildVersion' \
+  "$CLT/SDKs/MacOSX$SDK_VERSION.sdk/System/Library/CoreServices/SystemVersion.plist")
+if [[ $want_build != $have_build ]]; then
+  echo "warning: the tag pins SDK build $want_build; the Command Line Tools have $have_build"
+fi
+
+clt_version=$(pkgutil --pkg-info=com.apple.pkg.CLTools_Executables | awk '/^version:/ {print $2}')
+short=${clt_version%%.0.0.*}     # 26.6.0.0.1781586589 -> 26.6
+
+dev=$SHIM/Contents/Developer
+mkdir -p $dev/Platforms/MacOSX.platform/Developer/SDKs $dev/Toolchains/XcodeDefault.xctoolchain
+ln -sfn $CLT/SDKs/MacOSX$SDK_VERSION.sdk $dev/Platforms/MacOSX.platform/Developer/SDKs/MacOSX$SDK_VERSION.sdk
+ln -sfn $CLT/usr $dev/Toolchains/XcodeDefault.xctoolchain/usr
+ln -sfn $CLT/usr $dev/usr
+
+# sdk_info.py reads only these two keys. The build string says plainly that
+# this is the Command Line Tools, not Xcode; it ends up in Info.plist as
+# DTXcodeBuild.
+cat > $SHIM/Contents/version.plist <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleShortVersionString</key>
+  <string>$short</string>
+  <key>ProductBuildVersion</key>
+  <string>CLT$clt_version</string>
+</dict>
+</plist>
+EOF
+echo "CLT shim ok: $SHIM (Command Line Tools $clt_version, SDK $SDK_VERSION $have_build)"

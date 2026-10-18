@@ -1,0 +1,9 @@
+# Shipping build (plan §5.1, "official"). ThinLTO; links need ~20 GB each plus
+# 10 GB reserve, so keep concurrent_links = 1 on the Mac.
+import("//notolibra/build/args/common.gn")
+
+is_official_build = true
+is_component_build = false
+symbol_level = 1
+chrome_pgo_phase = 0
+concurrent_links = 1
