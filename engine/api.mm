@@ -32,6 +32,7 @@
 #include "content/public/browser/native_event_processor_mac.h"
 #include "content/public/browser/native_event_processor_observer_mac.h"
 #include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "notolibra/engine/browser_client.h"
 #include "notolibra/engine/browser_context.h"
@@ -246,6 +247,10 @@ NE_EXPORT ne_status ne_app_init(const ne_app_config* config,
     LOG(ERROR) << "content startup failed: " << exit_code;
     return NE_ERR_FAILED;
   }
+  // The app's own features run scripts in pages' main worlds (the gpui
+  // scrollbar's reports, Dark Reader's live updates), as CEF's
+  // ExecuteJavaScript allows.
+  content::RenderFrameHost::AllowInjectingJavaScript();
   *out_app = new ne_app{g_engine};
   return NE_OK;
 }
@@ -435,6 +440,29 @@ NE_EXPORT void ne_tab_eval(ne_tab* tab,
     return;
   }
   tab->impl->Eval(ToString(script), reason, done, user_data);
+}
+
+NE_EXPORT void ne_tab_eval_in_frame(ne_tab* tab,
+                                    ne_frame_id frame,
+                                    ne_string_view script,
+                                    ne_world world,
+                                    ne_eval_fn done,
+                                    void* user_data) {
+  if (!tab) {
+    if (done) {
+      done(user_data, NE_ERR_INVALID_ARGUMENT, nullptr);
+    }
+    return;
+  }
+  tab->impl->EvalInFrame(frame, ToString(script), world, done, user_data);
+}
+
+NE_EXPORT void ne_tab_for_each_frame(ne_tab* tab,
+                                     ne_frame_fn fn,
+                                     void* user_data) {
+  if (tab) {
+    tab->impl->ForEachFrame(fn, user_data);
+  }
 }
 
 NE_EXPORT void ne_tab_set_presenter(ne_tab* tab,

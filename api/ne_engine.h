@@ -24,7 +24,9 @@
  *  - The same header on every OS; only the presenter's surface handle and the
  *    window handle differ by platform.
  *
- * Status: declarations only. Nothing here is implemented yet.
+ * Status: implemented by engine/ (api.mm), except where a declaration says
+ * otherwise. Appended fields and functions are marked with the phase that
+ * added them.
  */
 
 #ifndef NOTOLIBRA_API_NE_ENGINE_H_
@@ -196,6 +198,29 @@ NE_EXPORT void ne_tab_eval(ne_tab* tab, ne_string_view script,
                            ne_eval_reason reason, ne_eval_fn done,
                            void* user_data);
 
+/* Frames (Phase 1). A frame id is Chromium's FrameTreeNode id: it names one
+ * frame of the page for as long as the frame exists, across its navigations
+ * and process swaps. 0 always means the page's main frame. */
+typedef int64_t ne_frame_id;
+
+/* The JavaScript world a script runs in. */
+typedef enum ne_world {
+  NE_WORLD_MAIN = 0,                  /* the page's own world */
+  NE_WORLD_APP = 1,                   /* our isolated world */
+} ne_world;
+
+/* Runs `script` in one frame. `done` may be NULL (no result is collected). */
+NE_EXPORT void ne_tab_eval_in_frame(ne_tab* tab, ne_frame_id frame,
+                                    ne_string_view script, ne_world world,
+                                    ne_eval_fn done, void* user_data);
+
+/* Calls `fn` once for each frame of the page that has committed a document,
+ * synchronously, main frame first. */
+typedef void (*ne_frame_fn)(void* user_data, ne_frame_id frame,
+                            ne_string_view url, bool is_main);
+NE_EXPORT void ne_tab_for_each_frame(ne_tab* tab, ne_frame_fn fn,
+                                     void* user_data);
+
 /* ------------------------------------------------------------------------ */
 /* Presenting a tab in a pane: off-screen compositing (plan.md §2.5)         */
 
@@ -228,6 +253,8 @@ typedef struct ne_presenter {
   void (*on_cursor)(void* user_data, int32_t cursor_kind);
   void (*on_scroll)(void* user_data, double x, double y,
                     double content_width, double content_height);
+  /* Phase 1: the page's background colour changed (ARGB). */
+  void (*on_background_color)(void* user_data, uint32_t background_color_argb);
 } ne_presenter;
 
 /* Attach or detach (presenter == NULL) a tab's frames to a pane. Moving a tab
@@ -261,6 +288,12 @@ typedef struct ne_input_event {
   int32_t phase;                      /* wheel phase, platform values */
   int32_t native_key_code;            /* virtual key code */
   ne_string_view text;                /* for NE_INPUT_CHAR and key events */
+  /* Phase 1: the wheel's momentum phase (blink's values: began 1,
+   * changed 4, ended 8; 0 none). With `phase` and this both 0 the engine
+   * adds phases itself, as for a mouse wheel. */
+  int32_t momentum_phase;
+  /* Phase 1: the characters ignoring modifiers, for key events. */
+  ne_string_view unmodified_text;
 } ne_input_event;
 
 NE_EXPORT void ne_tab_send_input(ne_tab* tab, const ne_input_event* event);
@@ -330,7 +363,25 @@ typedef struct ne_ui_delegate {
                               bool can_go_back, bool can_go_forward);
   void (*on_find_result)(void* user_data, ne_tab* tab, int32_t ordinal,
                          int32_t match_count, bool final_update);
+  /* Phase 1: a console message from one of the tab's frames. Return true
+   * when the app consumed it (it isn't logged). */
+  bool (*on_console_message)(void* user_data, ne_tab* tab, ne_frame_id frame,
+                             int32_t level, ne_string_view message,
+                             ne_string_view source, int32_t line);
+  /* Phase 1: loading progress per frame (ne_load_event_kind). */
+  void (*on_load_event)(void* user_data, ne_tab* tab, ne_frame_id frame,
+                        bool is_main, int32_t kind, ne_string_view url);
 } ne_ui_delegate;
+
+/* Phase 1: on_load_event's kinds. */
+typedef enum ne_load_event_kind {
+  /* The main frame started a cross-document navigation (not yet committed). */
+  NE_LOAD_NAVIGATION_STARTED = 1,
+  /* A frame committed a new document; scripts sent now run in it. */
+  NE_LOAD_COMMITTED = 2,
+  /* A frame's document and its subresources finished loading. */
+  NE_LOAD_FINISHED = 3,
+} ne_load_event_kind;
 
 NE_EXPORT void ne_app_set_ui_delegate(ne_app* app, const ne_ui_delegate* delegate);
 

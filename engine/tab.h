@@ -69,6 +69,12 @@ class Tab : public content::WebContentsDelegate,
             ne_eval_reason reason,
             ne_eval_fn done,
             void* user_data);
+  void EvalInFrame(ne_frame_id frame,
+                   const std::string& script,
+                   ne_world world,
+                   ne_eval_fn done,
+                   void* user_data);
+  void ForEachFrame(ne_frame_fn fn, void* user_data);
 
   // content::WebContentsDelegate:
   void NavigationStateChanged(content::WebContents* source,
@@ -103,6 +109,20 @@ class Tab : public content::WebContentsDelegate,
   void DidFirstVisuallyNonEmptyPaint() override;
   void TitleWasSet(content::NavigationEntry* entry) override;
   void DidStopLoading() override;
+  void DidStartNavigation(
+      content::NavigationHandle* navigation_handle) override;
+  void DidFinishNavigation(
+      content::NavigationHandle* navigation_handle) override;
+  void DidFinishLoad(content::RenderFrameHost* render_frame_host,
+                     const GURL& validated_url) override;
+  void OnBackgroundColorChanged() override;
+  void OnDidAddMessageToConsole(
+      content::RenderFrameHost* source_frame,
+      blink::mojom::ConsoleMessageLevel log_level,
+      const std::u16string& message,
+      int32_t line_no,
+      const std::u16string& source_id,
+      const std::optional<std::u16string>& untrusted_stack_trace) override;
 
   // content::JavaScriptDialogManager:
   void RunJavaScriptDialog(content::WebContents* web_contents,
@@ -143,7 +163,12 @@ class Tab : public content::WebContentsDelegate,
   void EnsureCapture();
   void ApplySize();
   void NotifyNavigationState();
+  void NotifyLoadEvent(content::RenderFrameHost* frame,
+                       ne_load_event_kind kind,
+                       const GURL& url);
   content::RenderWidgetHostView* view();
+  // The frame `id` names (0: the main frame), or null.
+  content::RenderFrameHost* FindFrame(ne_frame_id id);
 
   raw_ptr<ne_tab> handle_;
   std::unique_ptr<content::WebContents> web_contents_;
@@ -158,6 +183,9 @@ class Tab : public content::WebContentsDelegate,
   uint64_t next_frame_id_ = 1;
   std::map<uint64_t, HeldFrame> held_frames_;
   bool logged_unexpected_buffer_ = false;
+  // Whether the app consumed the console message the observer saw last; the
+  // delegate's DidAddMessageToConsole, called right after, returns it.
+  bool console_consumed_ = false;
 
   // Wheel events without phases (a mouse wheel) get Began/Changed phases
   // and an Ended one after a pause, as RenderWidgetHostViewMac's

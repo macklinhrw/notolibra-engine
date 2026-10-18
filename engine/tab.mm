@@ -18,6 +18,8 @@
 #include "content/public/browser/host_zoom_map.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/page.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
@@ -344,8 +346,12 @@ void Tab::SendInput(const ne_input_event& event) {
       wheel.delta_units = event.precise
                               ? ui::ScrollGranularity::kScrollByPrecisePixel
                               : ui::ScrollGranularity::kScrollByPixel;
-      if (event.phase) {
+      if (event.phase || event.momentum_phase) {
         wheel.phase = static_cast<blink::WebMouseWheelEvent::Phase>(event.phase);
+        wheel.momentum_phase =
+            static_cast<blink::WebMouseWheelEvent::Phase>(event.momentum_phase);
+        wheel_in_progress_ = false;
+        wheel_end_timer_.Stop();
       } else {
         wheel.phase = wheel_in_progress_ ? blink::WebMouseWheelEvent::kPhaseChanged
                                          : blink::WebMouseWheelEvent::kPhaseBegan;
@@ -364,6 +370,10 @@ void Tab::SendInput(const ne_input_event& event) {
       // Build the NSEvent AppKit would have sent, and let Chromium convert it
       // (key codes, DOM codes and keys) as RenderWidgetHostViewMac does.
       NSString* text = base::SysUTF8ToNSString(ToString(event.text));
+      NSString* unmodified =
+          event.unmodified_text.length
+              ? base::SysUTF8ToNSString(ToString(event.unmodified_text))
+              : text;
       NSEvent* ns_event = [NSEvent
                     keyEventWithType:event.kind == NE_INPUT_KEY_UP ? NSEventTypeKeyUp
                                                                   : NSEventTypeKeyDown
@@ -373,7 +383,7 @@ void Tab::SendInput(const ne_input_event& event) {
                         windowNumber:0
                              context:nil
                           characters:text
-         charactersIgnoringModifiers:text
+         charactersIgnoringModifiers:unmodified
                            isARepeat:NO
                              keyCode:static_cast<unsigned short>(
                                          event.native_key_code)];
@@ -384,7 +394,11 @@ void Tab::SendInput(const ne_input_event& event) {
       host->ForwardKeyboardEvent(key);
       // A key press that inserts text also sends a Char event, as the Mac
       // view's -insertText: does. Command-key shortcuts don't.
-      if (event.kind == NE_INPUT_KEY_DOWN && text.length > 0 &&
+      // Function keys (arrows and the like) carry AppKit's private-use
+      // characters and insert nothing.
+      const unichar first = text.length > 0 ? [text characterAtIndex:0] : 0;
+      const bool function_key = first >= 0xF700 && first <= 0xF8FF;
+      if (event.kind == NE_INPUT_KEY_DOWN && text.length > 0 && !function_key &&
           !(event.modifiers & (2 | 8))) {
         input::NativeWebKeyboardEvent char_event(gfx::NativeEvent{ns_event});
         char_event.SetType(blink::WebInputEvent::Type::kChar);
@@ -475,12 +489,72 @@ void Tab::Eval(const std::string& script,
         base::UTF8ToUTF16(script), std::move(callback),
         content::ISOLATED_WORLD_ID_CONTENT_END);
   } else {
-    // Phase 0: the main world through the test entry point. A real
-    // main-world path (with its own policy) replaces this.
-    frame->ExecuteJavaScriptForTests(base::UTF8ToUTF16(script),
-                                     std::move(callback),
-                                     content::ISOLATED_WORLD_ID_GLOBAL);
+    // The main world (ne_app_init allows injecting JavaScript).
+    frame->ExecuteJavaScript(base::UTF8ToUTF16(script), std::move(callback));
   }
+}
+
+content::RenderFrameHost* Tab::FindFrame(ne_frame_id id) {
+  if (id == 0) {
+    return web_contents_->GetPrimaryMainFrame();
+  }
+  content::RenderFrameHost* frame =
+      web_contents_->UnsafeFindFrameByFrameTreeNodeId(
+          content::FrameTreeNodeId(static_cast<int>(id)));
+  // Only frames of the page on screen (not prerendered or cached ones).
+  if (!frame || !frame->IsActive() ||
+      &frame->GetPage() != &web_contents_->GetPrimaryPage()) {
+    return nullptr;
+  }
+  return frame;
+}
+
+void Tab::EvalInFrame(ne_frame_id id,
+                      const std::string& script,
+                      ne_world world,
+                      ne_eval_fn done,
+                      void* user_data) {
+  content::RenderFrameHost* frame = FindFrame(id);
+  if (!frame || !frame->IsRenderFrameLive() ||
+      !frame->GetLastCommittedURL().is_valid()) {
+    if (done) {
+      done(user_data, NE_ERR_GONE, nullptr);
+    }
+    return;
+  }
+  content::RenderFrameHost::JavaScriptResultCallback callback;
+  if (done) {
+    callback = base::BindOnce(
+        [](ne_eval_fn done, void* user_data, base::Value value) {
+          std::string json;
+          base::JSONWriter::Write(value, &json);
+          done(user_data, NE_OK, json.c_str());
+        },
+        done, user_data);
+  }
+  if (world == NE_WORLD_APP) {
+    frame->ExecuteJavaScriptInIsolatedWorld(
+        base::UTF8ToUTF16(script), std::move(callback),
+        content::ISOLATED_WORLD_ID_CONTENT_END);
+  } else {
+    frame->ExecuteJavaScript(base::UTF8ToUTF16(script), std::move(callback));
+  }
+}
+
+void Tab::ForEachFrame(ne_frame_fn fn, void* user_data) {
+  if (!fn) {
+    return;
+  }
+  web_contents_->GetPrimaryMainFrame()->ForEachRenderFrameHost(
+      [&](content::RenderFrameHost* frame) {
+        if (!frame->IsRenderFrameLive() ||
+            !frame->GetLastCommittedURL().is_valid()) {
+          return;
+        }
+        std::string url = frame->GetLastCommittedURL().spec();
+        fn(user_data, frame->GetFrameTreeNodeId().value(),
+           {url.data(), url.size()}, frame->GetParentOrOuterDocument() == nullptr);
+      });
 }
 
 void Tab::NotifyNavigationState() {
@@ -548,8 +622,84 @@ bool Tab::DidAddMessageToConsole(content::WebContents* source,
                                  const std::u16string& message,
                                  int32_t line_no,
                                  const std::u16string& source_id) {
-  LOG(INFO) << "console: " << message;
-  return false;
+  // The observer (OnDidAddMessageToConsole) ran just before and asked the app.
+  bool consumed = console_consumed_;
+  console_consumed_ = false;
+  if (!consumed) {
+    VLOG(1) << "console: " << message;
+  }
+  return true;
+}
+
+void Tab::OnDidAddMessageToConsole(
+    content::RenderFrameHost* source_frame,
+    blink::mojom::ConsoleMessageLevel log_level,
+    const std::u16string& message,
+    int32_t line_no,
+    const std::u16string& source_id,
+    const std::optional<std::u16string>& untrusted_stack_trace) {
+  console_consumed_ = false;
+  Engine* engine = GetEngine();
+  if (!engine->has_ui_delegate || !engine->ui_delegate.on_console_message) {
+    return;
+  }
+  std::string text = base::UTF16ToUTF8(message);
+  std::string source = base::UTF16ToUTF8(source_id);
+  const ne_frame_id frame =
+      source_frame ? source_frame->GetFrameTreeNodeId().value() : 0;
+  console_consumed_ = engine->ui_delegate.on_console_message(
+      engine->ui_delegate.user_data, handle_, frame,
+      static_cast<int32_t>(log_level), {text.data(), text.size()},
+      {source.data(), source.size()}, line_no);
+}
+
+void Tab::NotifyLoadEvent(content::RenderFrameHost* frame,
+                          ne_load_event_kind kind,
+                          const GURL& url) {
+  Engine* engine = GetEngine();
+  if (!engine->has_ui_delegate || !engine->ui_delegate.on_load_event) {
+    return;
+  }
+  std::string spec = url.spec();
+  const bool is_main = !frame || frame->GetParentOrOuterDocument() == nullptr;
+  const ne_frame_id id = frame ? frame->GetFrameTreeNodeId().value() : 0;
+  engine->ui_delegate.on_load_event(engine->ui_delegate.user_data, handle_, id,
+                                    is_main, kind, {spec.data(), spec.size()});
+}
+
+void Tab::DidStartNavigation(content::NavigationHandle* navigation_handle) {
+  if (navigation_handle->IsInPrimaryMainFrame() &&
+      !navigation_handle->IsSameDocument()) {
+    NotifyLoadEvent(nullptr, NE_LOAD_NAVIGATION_STARTED,
+                    navigation_handle->GetURL());
+  }
+}
+
+void Tab::DidFinishNavigation(content::NavigationHandle* navigation_handle) {
+  if (!navigation_handle->HasCommitted() ||
+      navigation_handle->IsSameDocument() ||
+      !navigation_handle->GetRenderFrameHost() ||
+      !navigation_handle->GetRenderFrameHost()->GetPage().IsPrimary()) {
+    return;
+  }
+  NotifyLoadEvent(navigation_handle->GetRenderFrameHost(), NE_LOAD_COMMITTED,
+                  navigation_handle->GetURL());
+}
+
+void Tab::DidFinishLoad(content::RenderFrameHost* render_frame_host,
+                        const GURL& validated_url) {
+  if (!render_frame_host->GetPage().IsPrimary()) {
+    return;
+  }
+  NotifyLoadEvent(render_frame_host, NE_LOAD_FINISHED, validated_url);
+}
+
+void Tab::OnBackgroundColorChanged() {
+  if (has_presenter_ && presenter_.on_background_color) {
+    std::optional<SkColor> color = web_contents_->GetBackgroundColor();
+    presenter_.on_background_color(presenter_.user_data,
+                                   color.value_or(SK_ColorWHITE));
+  }
 }
 
 content::JavaScriptDialogManager* Tab::GetJavaScriptDialogManager(
