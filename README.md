@@ -11,13 +11,14 @@ app repository; section numbers below refer to it. Private; proprietary.
 | --- | --- |
 | `CHROMIUM_VERSION` | The Chromium tag we build (§5.5: Extended Stable). |
 | `api/ne_engine.h` | The C embedding API (§2.2). |
-| `engine/` | NotolibraEngine.framework (Phase 0: on `//content`): the API's implementation, a main delegate for every process, browser client and context, `Tab` (windowless WebContents, frames as IOSurfaces from Viz's capturer, input, dialogs and permissions as UI requests), the helper app, and the framework's own .pak. |
+| `engine/` | NotolibraEngine.framework (on `//content`): the API's implementation (`api.mm`), a main delegate for every process, browser client and profile (`browser_client`, `browser_context`: permissions, session SSL state, downloads, persistent storage, cookies encrypted in our own keychain item), `Tab` (`tab.mm`, `tab_ui.mm`: frames as IOSurfaces from Viz's capturer, input, dialogs, file choosers, context menus, new windows, favicons as UI requests), `view_bridge` (RenderWidgetHostViewMac's NSView calls as data: cursors, `<select>`, tooltips, IME), `request_filter` (the app's content filter in front of every page's URLLoaderFactory, on the IO thread), `frame_agent.mojom` and `renderer/` (document-start scripts run as each frame's main-world context is created), `download_delegate`, the sandboxed helper app, and the framework's own .pak. |
 | `proto/` | The Phase 0 gpui host: a standalone cargo project that shows a tab in a GPUI Fast composition surface and runs the Phase 0 checks hidden (`proto/run_checks`). |
 | `test/engine/` | `run_smoke`: the engine from a plain AppKit host, hidden. |
 | `build/args/` | GN args: `common.gn` (§3.2, §5.1), `dev.gn`, `release_test.gn`, `official.gn`, and `clt.gn` for building without Xcode. |
 | `build/config/BUILD.gn` | The `chromium_src` override config (§4.3). |
 | `chromium_src/` | Overrides, mirroring Chromium's paths (none yet). |
 | `patches/series` | Quilt-style series of the upstream patches we can't avoid (§4.4). |
+| App integration | The Notolibra app's `native/crates/engine_sys` (bindings, loaded with dlopen) and `native/crates/app/src/engine_notolibra.rs` (the browser pane's backend); `NOTOLIBRA_BROWSER_ENGINE=notolibra`. |
 | `scripts/` | `sync`, `build`, `patches.py`, `clt-xcode`, `redirect_cc`. |
 | `test/media/` | The Phase 0 media check (§6, check 6), run hidden. |
 | `docs/xcode.md` | What the macOS build needs from Xcode, and how it builds without it. |
@@ -65,6 +66,9 @@ Current series:
 | `macos-attach-mode` | 7 files in `base/` | The browser's UI thread attaches to a host's running `-[NSApplication run]` (iOS's attach mode, ported; §2.4). |
 | `embedder-run-loop` | `content_main.h`, `content_main.cc` | `ContentMainParams::embedder_owns_run_loop`: content starts without running or shutting down the loop. |
 | `chromium-src` (disabled) | `build/config/BUILDCONFIG.gn` | Turns on `chromium_src` overrides. |
+| `embedder-ns-view` | `render_widget_host_view_mac.{h,mm}`, `content/browser/BUILD.gn` | `RenderWidgetHostViewMac::SetEmbedderNSView`: the engine's view bridge takes the NSView's calls (cursors, `<select>`, IME state as data); `for_content_tests` visible to `//notolibra/*`. |
+| `embedder-keychain` | `components/os_crypt/common/BUILD.gn` | `ALLOW_RUNTIME_CONFIGURABLE_KEY_STORAGE`, so the engine names its own Safe Storage keychain item. |
+| `embedder-sandbox-path` | `content/browser/sandbox_parameters_mac.mm` | When the framework is outside the host app's bundle, the Seatbelt profile's bundle path is the framework's folder. |
 
 ## Licences
 
