@@ -10,7 +10,10 @@ app repository; section numbers below refer to it. Private; proprietary.
 | Path | What |
 | --- | --- |
 | `CHROMIUM_VERSION` | The Chromium tag we build (§5.5: Extended Stable). |
-| `api/ne_engine.h` | The C embedding API (§2.2). Phase 0 stub: declarations only. |
+| `api/ne_engine.h` | The C embedding API (§2.2). |
+| `engine/` | NotolibraEngine.framework (Phase 0: on `//content`): the API's implementation, a main delegate for every process, browser client and context, `Tab` (windowless WebContents, frames as IOSurfaces from Viz's capturer, input, dialogs and permissions as UI requests), the helper app, and the framework's own .pak. |
+| `proto/` | The Phase 0 gpui host: a standalone cargo project that shows a tab in a GPUI Fast composition surface and runs the Phase 0 checks hidden (`proto/run_checks`). |
+| `test/engine/` | `run_smoke`: the engine from a plain AppKit host, hidden. |
 | `build/args/` | GN args: `common.gn` (§3.2, §5.1), `dev.gn`, `release_test.gn`, `official.gn`, and `clt.gn` for building without Xcode. |
 | `build/config/BUILD.gn` | The `chromium_src` override config (§4.3). |
 | `chromium_src/` | Overrides, mirroring Chromium's paths (none yet). |
@@ -26,7 +29,10 @@ cd ~/chromium/src/notolibra
 scripts/sync                      # gclient sync to CHROMIUM_VERSION, apply patches, check them
 scripts/build                     # dev build of content_shell at -j 6 (daytime rule)
 scripts/build --jobs 10 --min-free-mem 25 content_shell chrome   # overnight
+scripts/build notolibra/engine    # NotolibraEngine.framework (+ helper app)
 test/media/run_media_check        # hidden codec check against out/Dev
+test/engine/run_smoke             # the engine from a plain AppKit host, hidden
+proto/run_checks                  # the gpui host's Phase 0 checks, hidden
 ```
 
 `scripts/build` refuses to start under 60 GiB free (AGENTS.md's floor is
@@ -55,7 +61,9 @@ Current series:
 | --- | --- | --- |
 | `clt-build` | ANGLE `metal_backend.gni` | Build with only the Command Line Tools: ANGLE compiles its internal Metal shaders at run time (`docs/xcode.md`). |
 | `ffmpeg-no-h264-aac-decoders` | FFmpeg `BUILD.gn`, Chrome mac arm64 `codec_list.c` and `config_components.h` | Chrome-branded FFmpeg without its H.264 and AAC decoders (§3.2; Chromium asserts `proprietary_codecs` needs Chrome branding). The two config files are LGPL. |
-| `media-audiotoolbox-aac` | `audio_toolbox_audio_decoder.cc`, `gpu_mojo_media_client_mac.cc`, `supported_types.cc` | AudioToolbox decodes all AAC, not only xHE-AAC (§3.3). |
+| `media-audiotoolbox-aac` | `audio_toolbox_audio_decoder.cc`, `gpu_mojo_media_client_mac.cc`, `supported_types.cc`, `ffmpeg_common.cc`, `audio_decoder_unittest.cc` | AudioToolbox decodes all AAC, not only xHE-AAC (§3.3); FFmpeg demuxes AAC it can't decode. |
+| `macos-attach-mode` | 7 files in `base/` | The browser's UI thread attaches to a host's running `-[NSApplication run]` (iOS's attach mode, ported; §2.4). |
+| `embedder-run-loop` | `content_main.h`, `content_main.cc` | `ContentMainParams::embedder_owns_run_loop`: content starts without running or shutting down the loop. |
 | `chromium-src` (disabled) | `build/config/BUILDCONFIG.gn` | Turns on `chromium_src` overrides. |
 
 ## Licences
