@@ -225,11 +225,11 @@ mac_framework_bundle("framework") {
         rebase_path("exported_symbols.txt", root_build_dir),
   ]
   inputs = [ "exported_symbols.txt" ]
-  if (is_component_build) {
-    # The framework is at out/<dir>/NotolibraEngine.framework/Versions/A/: up
-    # to the output directory for the component dylibs.
-    ldflags += [ "-Wl,-rpath,@loader_path/../../.." ]
-  }
+  # The framework is at <dir>/NotolibraEngine.framework/Versions/A/: up to
+  # the folder holding it, where the shared libraries are (the component
+  # dylibs of a component build, and FFmpeg's in every build; the app's
+  # bundle puts them in Contents/Frameworks beside the framework).
+  ldflags += [ "-Wl,-rpath,@loader_path/../../.." ]
 }
 
 mac_app_bundle("helper_app") {
@@ -242,10 +242,8 @@ mac_app_bundle("helper_app") {
     "//base/allocator:early_zone_registration_apple",
     "//sandbox/mac:seatbelt",
   ]
-  if (is_component_build) {
-    # NotolibraEngine.framework/Versions/A/Helpers/<helper>.app/Contents/MacOS:
-    # seven levels up is the output directory, where the framework and the
-    # component dylibs are.
-    ldflags = [ "-Wl,-rpath,@executable_path/../../../../../../.." ]
-  }
+  # NotolibraEngine.framework/Versions/A/Helpers/<helper>.app/Contents/MacOS:
+  # seven levels up is the folder holding the framework and the shared
+  # libraries.
+  ldflags = [ "-Wl,-rpath,@executable_path/../../../../../../.." ]
 }
