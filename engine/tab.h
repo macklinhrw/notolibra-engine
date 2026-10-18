@@ -143,6 +143,17 @@ class Tab : public content::WebContentsDelegate,
                       const blink::mojom::FileChooserParams& params) override;
   bool HandleContextMenu(content::RenderFrameHost& render_frame_host,
                          const content::ContextMenuParams& params) override;
+  // Element fullscreen (a video's fullscreen button) fills the page's own
+  // view, the app's pane, as content_shell's does its window; Escape leaves.
+  void EnterFullscreenModeForTab(
+      content::RenderFrameHost* requesting_frame,
+      const blink::mojom::FullscreenOptions& options) override;
+  void ExitFullscreenModeForTab(content::WebContents* web_contents) override;
+  bool IsFullscreenForTabOrPending(
+      const content::WebContents* web_contents) override;
+  content::KeyboardEventProcessingResult PreHandleKeyboardEvent(
+      content::WebContents* source,
+      const input::NativeWebKeyboardEvent& event) override;
 
   // content::WebContentsObserver:
   void RenderViewReady() override;
@@ -234,6 +245,7 @@ class Tab : public content::WebContentsDelegate,
   raw_ptr<ne_tab> handle_;
   const uint64_t id_;
   std::unique_ptr<content::WebContents> web_contents_;
+  bool fullscreen_ = false;
   ne_presenter presenter_ = {};
   bool has_presenter_ = false;
   gfx::Size size_{800, 600};

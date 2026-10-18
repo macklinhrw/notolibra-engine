@@ -15,7 +15,11 @@
 #include "content/public/browser/download_manager.h"
 #include "content/public/browser/download_request_utils.h"
 #include "content/public/browser/navigation_controller.h"
+#include "components/input/native_web_keyboard_event.h"
+#include "content/public/browser/keyboard_event_processing_result.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/render_view_host.h"
+#include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/web_contents.h"
 #include "components/download/public/common/download_url_parameters.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
@@ -23,6 +27,8 @@
 #include "notolibra/engine/tab.h"
 #include "third_party/blink/public/common/context_menu_data/edit_flags.h"
 #include "third_party/blink/public/mojom/context_menu/context_menu.mojom.h"
+#include "third_party/blink/public/mojom/frame/fullscreen.mojom.h"
+#include "ui/events/keycodes/keyboard_codes.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/gfx/codec/png_codec.h"
@@ -103,6 +109,46 @@ void Tab::RunFileChooser(content::RenderFrameHost* render_frame_host,
             listener->FileSelected(std::move(files), base_dir, mode);
           },
           std::move(listener), mode));
+}
+
+void Tab::EnterFullscreenModeForTab(
+    content::RenderFrameHost* requesting_frame,
+    const blink::mojom::FullscreenOptions& options) {
+  if (fullscreen_) {
+    return;
+  }
+  fullscreen_ = true;
+  web_contents_->GetPrimaryMainFrame()
+      ->GetRenderViewHost()
+      ->GetWidget()
+      ->SynchronizeVisualProperties();
+}
+
+void Tab::ExitFullscreenModeForTab(content::WebContents* web_contents) {
+  if (!fullscreen_) {
+    return;
+  }
+  fullscreen_ = false;
+  web_contents_->GetPrimaryMainFrame()
+      ->GetRenderViewHost()
+      ->GetWidget()
+      ->SynchronizeVisualProperties();
+}
+
+bool Tab::IsFullscreenForTabOrPending(
+    const content::WebContents* web_contents) {
+  return fullscreen_;
+}
+
+content::KeyboardEventProcessingResult Tab::PreHandleKeyboardEvent(
+    content::WebContents* source,
+    const input::NativeWebKeyboardEvent& event) {
+  if (fullscreen_ && event.windows_key_code == ui::VKEY_ESCAPE &&
+      event.GetType() == blink::WebInputEvent::Type::kRawKeyDown) {
+    web_contents_->ExitFullscreen(/*will_cause_resize=*/true);
+    return content::KeyboardEventProcessingResult::HANDLED;
+  }
+  return content::KeyboardEventProcessingResult::NOT_HANDLED;
 }
 
 bool Tab::HandleContextMenu(content::RenderFrameHost& render_frame_host,
