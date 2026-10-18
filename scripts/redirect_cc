@@ -1,0 +1,24 @@
+#!/bin/sh
+# Copyright 2026 Notolibra. All rights reserved.
+# cc_wrapper for chromium_src overrides (plan.md §4.3; see build/config/BUILD.gn).
+#   cc_wrapper = "../../notolibra/scripts/redirect_cc"
+# Called as `redirect_cc <compiler> <args...>` from the output directory. If a
+# source argument ../../<path>.{cc,mm,c,m} has an override at
+# ../../notolibra/chromium_src/<path>, the override is compiled instead. Chains
+# to ccache when it is installed (NOTOLIBRA_NO_CCACHE=1 to skip).
+root=../..
+overrides=$root/notolibra/chromium_src
+first=1
+for arg do
+  if [ $first = 1 ]; then set --; first=0; fi
+  case $arg in
+    $root/*.cc|$root/*.mm|$root/*.c|$root/*.m)
+      rel=${arg#"$root"/}
+      if [ -f "$overrides/$rel" ]; then arg=$overrides/$rel; fi ;;
+  esac
+  set -- "$@" "$arg"
+done
+if [ -z "${NOTOLIBRA_NO_CCACHE:-}" ] && command -v ccache >/dev/null 2>&1; then
+  exec ccache "$@"
+fi
+exec "$@"

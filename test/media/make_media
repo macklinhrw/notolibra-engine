@@ -1,0 +1,27 @@
+#!/bin/bash
+# Generate the media check's clips (3 s each, about 1 MB in total) with the
+# ffmpeg on PATH (Homebrew's has libx264, libx265, libsvtav1, libvpx, libopus
+# and aac_at, which makes HE-AAC). Inputs aren't checked in; their hashes are
+# recorded in media.sha256 instead (AGENTS.md: refer to inputs by hash).
+#   test/media/make_media [dir]     default: ~/chromium/scratch/media
+set -euo pipefail
+dir=${1:-$HOME/chromium/scratch/media}
+mkdir -p "$dir/hls" && cd "$dir"
+F="ffmpeg -hide_banner -loglevel error -y"
+SRC="-f lavfi -i testsrc2=size=320x240:rate=30:duration=3 -f lavfi -i sine=frequency=440:duration=3:sample_rate=44100"
+TONE="-f lavfi -i sine=frequency=440:duration=3:sample_rate=44100"
+FRAG="-movflags frag_keyframe+empty_moov+default_base_moof"
+$F $SRC -c:v libx264 -profile:v high -pix_fmt yuv420p -c:a aac -b:a 96k -ac 2 -movflags +faststart h264_aac.mp4
+$F $SRC -c:v libx264 -profile:v high -pix_fmt yuv420p -c:a aac -b:a 96k -ac 2 $FRAG h264_aac_frag.mp4
+$F $TONE -c:a aac -b:a 96k -ac 2 aac_lc.m4a
+$F $TONE -c:a aac -b:a 96k -ac 2 -f adts aac_lc.aac
+$F $TONE -c:a aac_at -profile:a 4 -b:a 48k -ac 2 he_aac.m4a          # HE-AAC v1
+$F $TONE -c:a aac_at -profile:a 28 -b:a 32k -ac 2 he_aac_v2.m4a      # HE-AAC v2
+$F $TONE -c:a aac -b:a 96k -ac 2 $FRAG aac_lc_frag.m4a
+$F $TONE -c:a aac_at -profile:a 4 -b:a 48k -ac 2 $FRAG he_aac_frag.m4a
+$F $SRC -c:v libx265 -tag:v hvc1 -pix_fmt yuv420p -x265-params log-level=error -c:a aac -ac 2 -movflags +faststart hevc_aac.mp4
+$F $SRC -c:v libvpx-vp9 -b:v 300k -c:a libopus -ac 2 vp9_opus.webm
+$F $SRC -c:v libsvtav1 -preset 10 -pix_fmt yuv420p -c:a libopus -ac 2 av1_opus.mp4 2>/dev/null
+$F -f lavfi -i testsrc2=size=48x48:rate=30:duration=3 -c:v libx264 -pix_fmt yuv420p -movflags +faststart h264_48x48.mp4
+$F $SRC -c:v libx264 -pix_fmt yuv420p -c:a aac -ac 2 -f hls -hls_time 1 -hls_playlist_type vod hls/index.m3u8
+shasum -a 256 *.mp4 *.m4a *.aac *.webm hls/*

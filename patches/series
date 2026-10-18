@@ -5,3 +5,7 @@ ffmpeg-no-h264-aac-decoders/third_party-ffmpeg-chromium-config-Chrome-mac-arm64-
 media-audiotoolbox-aac/media-filters-mac-audio_toolbox_audio_decoder.cc.patch
 media-audiotoolbox-aac/media-mojo-services-gpu_mojo_media_client_mac.cc.patch
 media-audiotoolbox-aac/media-base-supported_types.cc.patch
+
+# chromium_src overrides; enable after the Phase 0 baseline build (changes every compile command).
+# disabled: chromium-src/build-config-BUILDCONFIG.gn.patch
+media-audiotoolbox-aac/media-filters-audio_decoder_unittest.cc.patch

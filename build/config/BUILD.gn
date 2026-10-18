@@ -1,0 +1,16 @@
+# Copyright 2026 Notolibra. All rights reserved.
+
+# chromium_src overrides (plan.md §4.3), Brave's scheme written fresh:
+#  - `#include "chrome/browser/x.h"` picks up
+#    notolibra/chromium_src/chrome/browser/x.h first, because this config sits
+#    ahead of //build/config/compiler:default_include_dirs in
+#    default_compiler_configs (patches/chromium-src/build-config-BUILDCONFIG.gn.patch);
+#  - compiling chrome/browser/x.cc compiles notolibra/chromium_src/chrome/
+#    browser/x.cc instead, through scripts/redirect_cc (cc_wrapper);
+#  - an override reaches the file it overrides as "src/chrome/browser/x.h",
+#    through the checkout-root include path below.
+# Overrides #define a name and include the original; never copy upstream files.
+config("chromium_src_overrides") {
+  include_dirs = [ "//notolibra/chromium_src" ]
+  cflags = [ "-I" + rebase_path("//", root_build_dir) + "/.." ]
+}

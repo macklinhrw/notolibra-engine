@@ -1,0 +1,63 @@
+#!/bin/zsh
+# Run the Phase 0 media check (codec_check.html) hidden, with content_shell.
+#
+#   test/media/run_media_check [out_dir] [media_dir]
+#     out_dir    default: out/Dev (relative to src)
+#     media_dir  default: ~/chromium/scratch/media (make it with make_media)
+#
+# Hidden by construction:
+#  - content_shell's web test mode (--run-web-tests) is headless on macOS: it
+#    creates no NSWindow unless --disable-headless-mode is passed
+#    (content/web_test/browser/web_test_shell_platform_delegate.cc);
+#  - the app is marked LSBackgroundOnly (no Dock icon, no menu bar, never
+#    activates) and re-signed ad hoc;
+#  - every media element is muted, and --mute-audio is passed.
+set -uo pipefail
+ENGINE=${0:A:h:h:h}
+SRC=${ENGINE:h}
+out=${1:-out/Dev}
+media=${2:-$HOME/chromium/scratch/media}
+cd "$SRC" || exit 1
+
+app="$out/Content Shell.app"
+exe="$app/Contents/MacOS/Content Shell"
+[[ -x $exe ]] || { echo "error: $exe not built"; exit 1; }
+[[ -d $media ]] || { echo "error: no media at $media"; exit 1; }
+
+plist="$app/Contents/Info.plist"
+if [[ $(/usr/libexec/PlistBuddy -c 'Print :LSBackgroundOnly' "$plist" 2>/dev/null) != true ]]; then
+  /usr/libexec/PlistBuddy -c 'Add :LSBackgroundOnly bool true' "$plist" 2>/dev/null ||
+    /usr/libexec/PlistBuddy -c 'Set :LSBackgroundOnly true' "$plist"
+  codesign --force --sign - "$app" 2>&1 | grep -v 'replacing existing signature'
+fi
+
+serve=$(mktemp -d /tmp/nl-media-check.XXXXXX)
+ln -s "$ENGINE/test/media/codec_check.html" "$serve/codec_check.html"
+ln -s "$media" "$serve/media"
+port=$(( 20000 + RANDOM % 20000 ))
+python3 -m http.server $port --bind 127.0.0.1 --directory "$serve" >/dev/null 2>&1 &
+server=$!
+sleep 1
+
+ts=$(date +%Y%m%d-%H%M%S)
+logdir="$out/logs"
+mkdir -p "$logdir"
+result="$logdir/media-check-$ts.txt"
+stderr_log="$logdir/media-check-$ts.stderr.log"
+
+"$exe" --run-web-tests --mute-audio --autoplay-policy=no-user-gesture-required \
+  --enable-logging=stderr \
+  --vmodule='decoder_selector=2,decoder_stream=2,audio_toolbox_audio_decoder=2,video_toolbox_video_decoder=2,mojo_audio_decoder=2,ffmpeg_audio_decoder=2' \
+  "http://127.0.0.1:$port/codec_check.html" > "$result" 2> "$stderr_log" &
+shell=$!
+( sleep 240; kill $shell 2>/dev/null ) &
+watchdog=$!
+wait $shell
+rc=$?
+kill $watchdog $server 2>/dev/null
+rm -rf "$serve"
+
+sed -n '/^Mozilla/,/^== done/p' "$result"
+echo "--- exit $rc; full output $result, stderr $stderr_log"
+grep -E -o '(Selected|selected|Initializing|Initialize|decoder)[^"]{0,120}(AudioToolbox|VideoToolbox|FFmpeg|Dav1d|Vpx|Mojo|kAudioToolbox|kVideoToolbox)[^"]{0,40}' \
+  "$stderr_log" | sort | uniq -c | sort -rn | head -20

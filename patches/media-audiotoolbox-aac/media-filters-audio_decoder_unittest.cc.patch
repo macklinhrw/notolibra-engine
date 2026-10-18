@@ -1,0 +1,64 @@
+Reason: tests for the AudioToolbox AAC change. FFmpeg AAC cases skip when
+FFmpeg has no AAC decoder (ours doesn't); AudioToolbox gets an AAC-LC case
+(sfx.adts), with the ADTS AudioSpecificConfig extracted as for MediaCodec and
+Media Foundation. Expected timestamps are FFmpeg's until a run confirms
+AudioToolbox's. No upstream bug.
+
+diff --git a/media/filters/audio_decoder_unittest.cc b/media/filters/audio_decoder_unittest.cc
+index 37897d6d54..cdbde2e59d 100644
+--- a/media/filters/audio_decoder_unittest.cc
++++ b/media/filters/audio_decoder_unittest.cc
+@@ -263,6 +263,11 @@ class AudioDecoderTest
+ #endif
+       case AudioDecoderType::kOpus:
+         return params_.codec == AudioCodec::kOpus;
++      case AudioDecoderType::kFFmpeg:
++        // Builds may leave FFmpeg's AAC decoder out and decode AAC with the
++        // operating system instead.
++        return params_.codec != AudioCodec::kAAC ||
++               avcodec_find_decoder(AV_CODEC_ID_AAC) != nullptr;
+       default:
+         return true;
+     }
+@@ -332,12 +337,13 @@ class AudioDecoderTest
+         reader_->codec_context_for_testing(), EncryptionScheme::kUnencrypted,
+         &config));
+ 
+-#if (BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_WIN)) && \
++#if (BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)) && \
+     BUILDFLAG(USE_PROPRIETARY_CODECS)
+     // MediaCodec type requires config->extra_data() for AAC codec. For ADTS
+     // streams we need to extract it with a separate procedure.
+     if ((decoder_type_ == AudioDecoderType::kMediaCodec ||
+-         decoder_type_ == AudioDecoderType::kMediaFoundation) &&
++         decoder_type_ == AudioDecoderType::kMediaFoundation ||
++         decoder_type_ == AudioDecoderType::kAudioToolbox) &&
+         codec() == AudioCodec::kAAC && config.extra_data().empty()) {
+       const auto header = ADTSStreamParser::ParseHeader(AVPacketData(*packet));
+       ASSERT_TRUE(header.has_value());
+@@ -1549,6 +1555,25 @@ INSTANTIATE_TEST_SUITE_P(AudioToolbox,
+                          AudioDecoderTest,
+                          Combine(Values(AudioDecoderType::kAudioToolbox),
+                                  ValuesIn(kXheAacTestParams)));
++
++// AAC-LC through AudioToolbox. No hashes: the decoder belongs to the OS.
++constexpr TestParams kAudioToolboxAacTestParams[] = {
++    {AudioCodec::kAAC,
++     "sfx.adts",
++     {{
++         {0, 23219, nullptr},
++         {23219, 23219, nullptr},
++         {46439, 23219, nullptr},
++     }},
++     0,
++     44100,
++     CHANNEL_LAYOUT_MONO},
++};
++
++INSTANTIATE_TEST_SUITE_P(AudioToolboxAac,
++                         AudioDecoderTest,
++                         Combine(Values(AudioDecoderType::kAudioToolbox),
++                                 ValuesIn(kAudioToolboxAacTestParams)));
+ #elif BUILDFLAG(IS_WIN)
+ INSTANTIATE_TEST_SUITE_P(MediaFoundation,
+                          AudioDecoderTest,

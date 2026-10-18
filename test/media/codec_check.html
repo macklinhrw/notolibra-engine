@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<!-- Copyright 2026 Notolibra. All rights reserved.
+     Phase 0 media check (plan.md §6, check 6), run hidden by run_media_check:
+     reports what the build claims (canPlayType, isTypeSupported) and what it
+     actually plays. Every element is muted. -->
+<meta charset="utf-8">
+<title>codec check</title>
+<pre id="out"></pre>
+<script>
+if (window.testRunner) {
+  testRunner.dumpAsText();
+  testRunner.waitUntilDone();
+}
+const out = document.getElementById('out');
+const log = (line) => { out.textContent += line + '\n'; };
+
+const TYPES = [
+  ['H.264 High', 'video/mp4; codecs="avc1.64001f"'],
+  ['H.264 Baseline', 'video/mp4; codecs="avc1.42E01E"'],
+  ['AAC-LC', 'audio/mp4; codecs="mp4a.40.2"'],
+  ['HE-AAC v1', 'audio/mp4; codecs="mp4a.40.5"'],
+  ['HE-AAC v2', 'audio/mp4; codecs="mp4a.40.29"'],
+  ['xHE-AAC', 'audio/mp4; codecs="mp4a.40.42"'],
+  ['H.264+AAC', 'video/mp4; codecs="avc1.64001f, mp4a.40.2"'],
+  ['HEVC hvc1', 'video/mp4; codecs="hvc1.1.6.L93.B0"'],
+  ['HEVC hev1', 'video/mp4; codecs="hev1.1.6.L93.B0"'],
+  ['VP9 (WebM)', 'video/webm; codecs="vp9"'],
+  ['VP9 (MP4)', 'video/mp4; codecs="vp09.00.10.08"'],
+  ['AV1 (MP4)', 'video/mp4; codecs="av01.0.04M.08"'],
+  ['Opus (WebM)', 'audio/webm; codecs="opus"'],
+  ['ADTS AAC', 'audio/aac'],
+  ['MPEG-2 TS H.264+AAC', 'video/mp2t; codecs="avc1.64001f, mp4a.40.2"'],
+  ['HLS', 'application/vnd.apple.mpegurl'],
+];
+
+// [name, url, kind, mse mime or null]
+const CLIPS = [
+  ['src= MP4 H.264+AAC-LC', 'media/h264_aac.mp4', 'video', null],
+  ['src= MP4 H.264 48x48', 'media/h264_48x48.mp4', 'video', null],
+  ['src= MP4 HEVC+AAC-LC', 'media/hevc_aac.mp4', 'video', null],
+  ['src= WebM VP9+Opus', 'media/vp9_opus.webm', 'video', null],
+  ['src= MP4 AV1+Opus', 'media/av1_opus.mp4', 'video', null],
+  ['src= M4A AAC-LC', 'media/aac_lc.m4a', 'audio', null],
+  ['src= M4A HE-AAC v1', 'media/he_aac.m4a', 'audio', null],
+  ['src= M4A HE-AAC v2', 'media/he_aac_v2.m4a', 'audio', null],
+  ['src= ADTS AAC-LC', 'media/aac_lc.aac', 'audio', null],
+  ['src= HLS H.264+AAC', 'media/hls/index.m3u8', 'video', null],
+  ['MSE MP4 H.264+AAC-LC', 'media/h264_aac_frag.mp4', 'video',
+   'video/mp4; codecs="avc1.640015, mp4a.40.2"'],
+  ['MSE M4A AAC-LC', 'media/aac_lc_frag.m4a', 'audio',
+   'audio/mp4; codecs="mp4a.40.2"'],
+  ['MSE M4A HE-AAC v1', 'media/he_aac_frag.m4a', 'audio',
+   'audio/mp4; codecs="mp4a.40.5"'],
+];
+
+function report() {
+  log('== reported support');
+  for (const [name, type] of TYPES) {
+    const mse = window.MediaSource ? MediaSource.isTypeSupported(type) : 'n/a';
+    const el = document.createElement(type.startsWith('audio') ? 'audio' : 'video');
+    log(`${name.padEnd(22)} canPlayType=${JSON.stringify(el.canPlayType(type)).padEnd(12)} isTypeSupported=${mse}   ${type}`);
+  }
+}
+
+function attachMse(el, url, mime) {
+  return new Promise((resolve, reject) => {
+    if (!MediaSource.isTypeSupported(mime)) {
+      reject(new Error('isTypeSupported=false'));
+      return;
+    }
+    const ms = new MediaSource();
+    el.src = URL.createObjectURL(ms);
+    ms.addEventListener('sourceopen', async () => {
+      try {
+        const sb = ms.addSourceBuffer(mime);
+        const data = await (await fetch(url)).arrayBuffer();
+        sb.addEventListener('updateend', () => { ms.endOfStream(); resolve(); },
+                            {once: true});
+        sb.addEventListener('error', () => reject(new Error('SourceBuffer error')),
+                            {once: true});
+        sb.appendBuffer(data);
+      } catch (e) { reject(e); }
+    }, {once: true});
+  });
+}
+
+function playClip([name, url, kind, mime]) {
+  return new Promise((resolve) => {
+    const el = document.createElement(kind);
+    el.muted = true;
+    el.volume = 0;
+    document.body.appendChild(el);
+    let done = false;
+    const finish = (status, detail) => {
+      if (done) return;
+      done = true;
+      const q = el.getVideoPlaybackQuality ? el.getVideoPlaybackQuality() : null;
+      const frames = q ? q.totalVideoFrames : '-';
+      const audio = el.webkitAudioDecodedByteCount ?? '-';
+      log(`${status.padEnd(4)} ${name.padEnd(26)} t=${el.currentTime.toFixed(2)} ` +
+          `videoFrames=${frames} audioBytes=${audio} ${detail || ''}`);
+      el.pause();
+      el.remove();
+      resolve();
+    };
+    el.addEventListener('error', () => {
+      const e = el.error;
+      finish('FAIL', `error ${e ? e.code + ' ' + e.message : '?'}`);
+    });
+    el.addEventListener('timeupdate', () => {
+      const videoOk = kind !== 'video' ||
+          (el.getVideoPlaybackQuality().totalVideoFrames > 10);
+      const audioOk = kind !== 'audio' || el.webkitAudioDecodedByteCount > 0;
+      if (el.currentTime > 1.0 && videoOk && audioOk) finish('PASS');
+    });
+    setTimeout(() => finish('FAIL', 'timeout (no progress in 8 s)'), 8000);
+    const start = mime ? attachMse(el, url, mime) : Promise.resolve(el.src = url);
+    start.then(() => el.play()).catch((e) => finish('FAIL', String(e)));
+  });
+}
+
+(async () => {
+  log(navigator.userAgent);
+  report();
+  log('== playback (muted)');
+  for (const clip of CLIPS) await playClip(clip);
+  log('== done');
+  if (window.testRunner) testRunner.notifyDone();
+})();
+</script>

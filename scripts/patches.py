@@ -3,7 +3,8 @@
 """Quilt-style patch series for the Notolibra engine.
 
 The series lives in patches/series, one patch per line, in apply order.
-Blank lines and lines starting with '#' are ignored.
+Blank lines and lines starting with '#' are ignored, except
+'# disabled: <patch>', which keeps a patch in the series without applying it.
 
 Conventions (plan.md §4.3-§4.4):
   * One upstream file per patch, and the patch is named after that file with
@@ -96,17 +97,24 @@ def read_series():
     return out
 
 
+def read_disabled():
+    if not SERIES.exists():
+        return set()
+    return {l.split(':', 1)[1].strip() for l in SERIES.read_text().splitlines()
+            if l.strip().startswith('# disabled:')}
+
+
 def cmd_check(args):
     errors = []
     series = read_series()
-    listed = set(series)
+    listed = set(series) | read_disabled()
     on_disk = {str(p.relative_to(PATCHES)) for p in PATCHES.rglob('*.patch')}
     for rel in series:
         if rel not in on_disk:
             errors.append(f'{rel}: listed in series but missing')
     for rel in sorted(on_disk - listed):
         errors.append(f'{rel}: patch file not listed in series')
-    if len(series) != len(listed):
+    if len(series) != len(set(series)):
         errors.append('series lists a patch more than once')
     for rel in series:
         p = Patch(rel)
