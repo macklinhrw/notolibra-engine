@@ -397,6 +397,7 @@ fn main() {
                 let failures = run_checks(&view, window, cx).await;
                 // SAFETY: live app; tabs are closed by the engine.
                 unsafe { ne_app_try_terminate(app(), std::ptr::null(), std::ptr::null_mut()) };
+                let _ = std::fs::remove_dir_all(profile_dir());
                 println!("{}: {failures} failures", if failures == 0 { "PASS" } else { "FAIL" });
                 std::process::exit(if failures == 0 { 0 } else { 1 });
             }
@@ -405,9 +406,13 @@ fn main() {
     });
 }
 
+/// A throwaway profile per run, removed at exit.
+fn profile_dir() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("nl-engine-proto-{}", std::process::id()))
+}
+
 fn start_engine() -> Option<*mut ne_app> {
-    let profile = std::env::temp_dir().join(format!("nl-engine-proto-{}", std::process::id()));
-    let profile = profile.to_string_lossy().into_owned();
+    let profile = profile_dir().to_string_lossy().into_owned();
     let args = [c"--mute-audio".as_ptr(), c"--autoplay-policy=no-user-gesture-required".as_ptr()];
     let config = ne_app_config {
         size: size_of::<ne_app_config>(),
