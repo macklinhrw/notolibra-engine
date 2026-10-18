@@ -1,0 +1,38 @@
+Reason: NotolibraEngine.framework may live outside the host app's bundle (the
+plan's downloaded component, §5.7, or a development build in out/Dev); the
+Seatbelt profile's BUNDLE_PATH (and, in component builds, COMPONENT_PATH) is
+then the framework's folder, so sandboxed children can read their helper,
+resources and libraries. Unchanged when the framework is inside the main
+bundle (Chrome, content_shell, the app bundle). No upstream bug.
+
+diff --git a/content/browser/sandbox_parameters_mac.mm b/content/browser/sandbox_parameters_mac.mm
+index 751ac84024..401ebb5b3a 100644
+--- a/content/browser/sandbox_parameters_mac.mm
++++ b/content/browser/sandbox_parameters_mac.mm
+@@ -119,8 +119,16 @@ void SetupCommonSandboxParameters(
+   CHECK(serializer->SetBooleanParameter(
+       sandbox::policy::kParamDisableSandboxDenialLogging, !enable_logging));
+ 
++  // Notolibra: an embedder's framework can live outside the host app's
++  // bundle (a downloaded component, or a development build); its folder is
++  // then what child processes read (helpers, resources, libraries).
++  base::FilePath sandbox_bundle = base::apple::MainBundlePath();
++  const base::FilePath framework = base::apple::FrameworkBundlePath();
++  if (!framework.empty() && !sandbox_bundle.IsParent(framework)) {
++    sandbox_bundle = framework.DirName();
++  }
+   std::string bundle_path =
+-      sandbox::policy::GetCanonicalPath(base::apple::MainBundlePath()).value();
++      sandbox::policy::GetCanonicalPath(sandbox_bundle).value();
+   CHECK(
+       serializer->SetParameter(sandbox::policy::kParamBundlePath, bundle_path));
+ 
+@@ -141,7 +149,7 @@ void SetupCommonSandboxParameters(
+ #if defined(COMPONENT_BUILD)
+   // For component builds, allow access to one directory level higher, where
+   // the dylibs live.
+-  base::FilePath component_path = base::apple::MainBundlePath().Append("..");
++  base::FilePath component_path = sandbox_bundle.Append("..");
+   std::string component_path_canonical =
+       sandbox::policy::GetCanonicalPath(component_path).value();
+   CHECK(serializer->SetParameter(sandbox::policy::kParamComponentPath,

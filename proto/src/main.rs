@@ -561,6 +561,24 @@ fn snapshot(window: AnyWindowHandle, cx: &mut AsyncApp) -> Option<mac::Snapshot>
     mac::Snapshot::take(win())
 }
 
+/// A click on gpui content, through gpui's own dispatch: AppKit events
+/// synthesized for the hidden window land on the native surface beneath
+/// gpui's overlay (the Phase 0 caveat), as the app's checks also found.
+fn click_gpui(window: AnyWindowHandle, cx: &mut AsyncApp, x: f32, y: f32) {
+    log::debug!("gpui click at {x},{y}");
+    let position = point(px(x), px(y));
+    for input in [
+        PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: None, modifiers: Modifiers::default() }),
+        PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Left, position, modifiers: Modifiers::default(), click_count: 1, first_mouse: false }),
+        PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Left, position, modifiers: Modifiers::default(), click_count: 1 }),
+    ] {
+        let _ = window.update(cx, |_, window, cx| {
+            window.dispatch_event(input, cx);
+        });
+        redraw(window, cx);
+    }
+}
+
 fn click(_window: AnyWindowHandle, _cx: &mut AsyncApp, x: f32, y: f32) {
     log::debug!("click at {x},{y}");
     mac::click(win(), x as f64, y as f64, std::env::var_os("NOTOLIBRA_PROTO_POST").is_some());
@@ -630,20 +648,15 @@ async fn run_checks(view: &Entity<ProtoView>, window: AnyWindowHandle, cx: &mut 
     redraw(window, cx);
     sleep(cx, 100).await;
     let dialog_px = snapshot(window, cx).and_then(|s| s.rgb((DIALOG.0 + 200.) as f64, (DIALOG.1 + 60.) as f64));
-    click(window, cx, DIALOG.0 + 20. + 75., DIALOG.1 + 120. + 20.); // "OK"
+    click_gpui(window, cx, DIALOG.0 + 20. + 75., DIALOG.1 + 120. + 20.); // "OK"
     let clicked = !wait_for(cx, 1000, || STATE.with_borrow(|s| s.request.is_some())).await;
-    if !clicked {
-        // The synthetic click didn't reach gpui (see phase-0-log.md): answer
-        // the way the OK button's handler does.
-        respond(true);
-    }
     sleep(cx, 200).await;
     let answer = eval(cx, "String(window.answer)").await;
     report(
         &mut failures,
-        arrived && mac::is_yellow(dialog_px) && answer == "\"true\"",
+        arrived && clicked && mac::is_yellow(dialog_px) && answer == "\"true\"",
         "js-dialog-in-gpui",
-        format!("arrived={arrived} drawn_pixel={dialog_px:?} answer={answer} answered_by={}", if clicked { "click" } else { "handler" }),
+        format!("arrived={arrived} drawn_pixel={dialog_px:?} answer={answer} answered_by={}", if clicked { "click" } else { "nothing" }),
     );
 
     // 5. A permission prompt as data, drawn by gpui, blocked by a click.
@@ -653,18 +666,15 @@ async fn run_checks(view: &Entity<ProtoView>, window: AnyWindowHandle, cx: &mut 
     redraw(window, cx);
     sleep(cx, 100).await;
     let prompt_px = snapshot(window, cx).and_then(|s| s.rgb((DIALOG.0 + 200.) as f64, (DIALOG.1 + 60.) as f64));
-    click(window, cx, DIALOG.0 + 230. + 75., DIALOG.1 + 120. + 20.); // "Block"
+    click_gpui(window, cx, DIALOG.0 + 230. + 75., DIALOG.1 + 120. + 20.); // "Block"
     let clicked = !wait_for(cx, 1000, || STATE.with_borrow(|s| s.request.is_some())).await;
-    if !clicked {
-        respond(false);
-    }
     sleep(cx, 200).await;
     let perm = eval(cx, "String(window.perm)").await;
     report(
         &mut failures,
-        arrived && mac::is_yellow(prompt_px) && perm == "\"denied\"",
+        arrived && clicked && mac::is_yellow(prompt_px) && perm == "\"denied\"",
         "permission-in-gpui",
-        format!("arrived={arrived} detail={detail} drawn_pixel={prompt_px:?} answer={perm} answered_by={}", if clicked { "click" } else { "handler" }),
+        format!("arrived={arrived} detail={detail} drawn_pixel={prompt_px:?} answer={perm} answered_by={}", if clicked { "click" } else { "nothing" }),
     );
 
     // 6. The last frame stands in while the pane resizes (freeze), then the
