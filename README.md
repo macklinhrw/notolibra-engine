@@ -69,6 +69,7 @@ Current series:
 | `embedder-ns-view` | `render_widget_host_view_mac.{h,mm}`, `content/browser/BUILD.gn` | `RenderWidgetHostViewMac::SetEmbedderNSView`: the engine's view bridge takes the NSView's calls (cursors, `<select>`, IME state as data); `for_content_tests` visible to `//notolibra/*`. |
 | `embedder-keychain` | `components/os_crypt/common/BUILD.gn` | `ALLOW_RUNTIME_CONFIGURABLE_KEY_STORAGE`, so the engine names its own Safe Storage keychain item. |
 | `embedder-sandbox-path` | `content/browser/sandbox_parameters_mac.mm` | When the framework is outside the host app's bundle, the Seatbelt profile's bundle path is the framework's folder. |
+| `nonbundled-ffmpeg-rpath` | `build/config/mac/BUILD.gn` | FFmpeg is a shared library in every build, so non-component builds (`release_test`) give binaries the component build's rpaths; build tools such as `v8_context_snapshot_generator` load it. |
 
 ## Licences
 
