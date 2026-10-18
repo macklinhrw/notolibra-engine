@@ -9,3 +9,4 @@ media-audiotoolbox-aac/media-base-supported_types.cc.patch
 # chromium_src overrides; enable after the Phase 0 baseline build (changes every compile command).
 # disabled: chromium-src/build-config-BUILDCONFIG.gn.patch
 media-audiotoolbox-aac/media-filters-audio_decoder_unittest.cc.patch
+media-audiotoolbox-aac/media-ffmpeg-ffmpeg_common.cc.patch

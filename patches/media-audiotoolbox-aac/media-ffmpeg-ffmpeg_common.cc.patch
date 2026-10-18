@@ -1,0 +1,44 @@
+Reason: with no FFmpeg AAC decoder, avformat_find_stream_info() leaves
+sample_fmt unset for AAC, so FFmpegDemuxer rejected every src= AAC stream
+("no supported streams"; MP4 video played silent). Treat AAC like AC3/E-AC3
+already are here: demuxed only, sample format float (what AudioToolbox
+outputs), and skip the sample_fmt DCHECK. Chromium's own file (BSD-3); does the
+job of Vivaldi's LGPL aac_stub_decoder.c without using it. No upstream bug.
+
+diff --git a/media/ffmpeg/ffmpeg_common.cc b/media/ffmpeg/ffmpeg_common.cc
+index 1eeaafafaf..11a8bf067a 100644
+--- a/media/ffmpeg/ffmpeg_common.cc
++++ b/media/ffmpeg/ffmpeg_common.cc
+@@ -410,6 +410,17 @@ bool AVCodecContextToAudioDecoderConfig(const AVCodecContext* codec_context,
+       break;
+ #endif
+ 
++#if BUILDFLAG(USE_PROPRIETARY_CODECS)
++    // Builds without FFmpeg's AAC decoder only demux AAC, which the platform
++    // then decodes, so FFmpeg doesn't fill |sample_fmt| (as for AC3 above).
++    // The platform decoders output float.
++    case AudioCodec::kAAC:
++      if (codec_context->sample_fmt == AV_SAMPLE_FMT_NONE) {
++        sample_format = kSampleFormatF32;
++      }
++      break;
++#endif
++
+     default:
+       break;
+   }
+@@ -480,6 +491,14 @@ bool AVCodecContextToAudioDecoderConfig(const AVCodecContext* codec_context,
+   }
+ #endif
+ 
++#if BUILDFLAG(USE_PROPRIETARY_CODECS)
++  // Demuxed only, as above: FFmpeg has no |sample_fmt| to check against.
++  if (codec == AudioCodec::kAAC &&
++      codec_context->sample_fmt == AV_SAMPLE_FMT_NONE) {
++    return true;
++  }
++#endif
++
+   // Verify that AudioConfig.bytes_per_channel was calculated correctly for
+   // codecs that have |sample_fmt| set by FFmpeg.
+   DCHECK_EQ(av_get_bytes_per_sample(codec_context->sample_fmt),
