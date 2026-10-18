@@ -17,6 +17,7 @@
 #include "net/base/net_errors.h"
 #include "net/ssl/ssl_info.h"
 #include "notolibra/engine/browser_context.h"
+#include "notolibra/engine/request_filter.h"
 #include "notolibra/engine/tab.h"
 #include "services/network/public/cpp/cookie_encryption_provider_impl.h"
 #include "url/origin.h"
@@ -277,6 +278,30 @@ void BrowserClient::AllowCertificateError(
                     : content::CERTIFICATE_REQUEST_RESULT_TYPE_DENY);
           },
           strict_enforcement, std::move(callback)));
+}
+
+void BrowserClient::WillCreateURLLoaderFactory(
+    content::BrowserContext* browser_context,
+    content::RenderFrameHost* frame,
+    int render_process_id,
+    URLLoaderFactoryType type,
+    const url::Origin& request_initiator,
+    const net::IsolationInfo& isolation_info,
+    std::optional<int64_t> navigation_id,
+    ukm::SourceIdObj ukm_source_id,
+    network::URLLoaderFactoryBuilder& factory_builder,
+    mojo::PendingRemote<network::mojom::TrustedURLLoaderHeaderClient>*
+        header_client,
+    bool* bypass_redirect_checks,
+    bool* disable_secure_dns,
+    network::mojom::URLLoaderFactoryOverridePtr* factory_override,
+    scoped_refptr<base::SequencedTaskRunner> navigation_response_task_runner,
+    bool is_for_network_service) {
+  // Every page's requests pass the app's content filter (request_filter.h).
+  content::WebContents* contents =
+      frame ? content::WebContents::FromRenderFrameHost(frame) : nullptr;
+  Tab* tab = contents ? Tab::FromWebContents(contents) : nullptr;
+  InstallRequestFilter(factory_builder, tab ? tab->id() : 0);
 }
 
 BrowserContext* BrowserClient::browser_context() {

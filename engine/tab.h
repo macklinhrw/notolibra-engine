@@ -66,6 +66,8 @@ class Tab : public content::WebContentsDelegate,
   static Tab* FromWebContents(content::WebContents* contents);
 
   ne_tab* handle() { return handle_; }
+  // ne_tab_id(): never reused.
+  uint64_t id() const { return id_; }
   content::WebContents* web_contents() { return web_contents_.get(); }
 
   void Load(const std::string& url);
@@ -152,6 +154,8 @@ class Tab : public content::WebContentsDelegate,
   void DidStopLoading() override;
   void DidStartNavigation(
       content::NavigationHandle* navigation_handle) override;
+  void ReadyToCommitNavigation(
+      content::NavigationHandle* navigation_handle) override;
   void DidFinishNavigation(
       content::NavigationHandle* navigation_handle) override;
   void DidFinishLoad(content::RenderFrameHost* render_frame_host,
@@ -228,6 +232,7 @@ class Tab : public content::WebContentsDelegate,
   content::RenderFrameHost* FindFrame(ne_frame_id id);
 
   raw_ptr<ne_tab> handle_;
+  const uint64_t id_;
   std::unique_ptr<content::WebContents> web_contents_;
   ne_presenter presenter_ = {};
   bool has_presenter_ = false;

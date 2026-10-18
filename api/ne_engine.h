@@ -589,6 +589,61 @@ NE_EXPORT void ne_download_cancel(ne_app* app, uint64_t download_id);
 NE_EXPORT double ne_tab_get_zoom(ne_tab* tab);
 
 /* ------------------------------------------------------------------------ */
+/* Phase 1: content blocking and document-start scripts (plan.md §4.6)       */
+
+/* A tab's id: stable, never reused, and usable on any thread. */
+NE_EXPORT uint64_t ne_tab_id(ne_tab* tab);
+
+typedef enum ne_filter_decision {
+  NE_FILTER_ALLOW = 0,
+  NE_FILTER_BLOCK = 1,
+  /* Answer with the filter's own response (a "redirect" stand-in). */
+  NE_FILTER_RESPOND = 2,
+} ne_filter_decision;
+
+typedef struct ne_request_info {
+  size_t size;
+  uint64_t tab_id;                    /* ne_tab_id() of the page; 0 if none */
+  ne_string_view url;
+  ne_string_view initiator;           /* the requesting origin; empty if none */
+  /* adblock-rust's names: "sub_frame", "stylesheet", "script", "image",
+   * "font", "object", "media", "xhr", "ping", "csp_report", "other" */
+  ne_string_view resource_type;
+  ne_string_view method;              /* upper case */
+} ne_request_info;
+
+typedef struct ne_filter_response {
+  size_t size;
+  ne_string_view mime_type;
+  const uint8_t* body;                /* valid until the filter's next call on this thread */
+  size_t body_size;
+} ne_filter_response;
+
+/* Decides each subresource and subframe request. Top-level pages are never
+ * filtered. Called on the engine's IO thread, NOT the main thread: it must
+ * be fast and thread-safe. Null removes the filter. */
+typedef int32_t (*ne_request_filter_fn)(void* user_data,
+                                        const ne_request_info* request,
+                                        ne_filter_response* out_response);
+NE_EXPORT void ne_app_set_request_filter(ne_app* app, ne_request_filter_fn fn,
+                                         void* user_data);
+
+/* The script a frame runs in its main world before any of the page's own,
+ * as its document's script context is created (scriptlets, Dark Reader).
+ * Called on the main thread as each frame is about to commit a document.
+ * `frame` is -1 for the frames a document creates without navigating
+ * (about:blank children), whose script the engine asks for with the
+ * parent's. Return a NUL-terminated string valid until the next call, or
+ * NULL for none. */
+typedef const char* (*ne_document_start_fn)(void* user_data, ne_tab* tab,
+                                            ne_frame_id frame,
+                                            ne_string_view frame_url,
+                                            ne_string_view top_url,
+                                            bool is_main);
+NE_EXPORT void ne_app_set_document_start(ne_app* app, ne_document_start_fn fn,
+                                         void* user_data);
+
+/* ------------------------------------------------------------------------ */
 /* Features and per-site effects (ArcFeature, ArcBrowserContextEffects)       */
 
 typedef enum ne_feature {

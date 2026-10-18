@@ -13,6 +13,7 @@ import("//third_party/icu/config.gni")
 import("//tools/v8_context_snapshot/v8_context_snapshot.gni")
 import("//ui/gl/features.gni")
 import("//v8/gni/v8.gni")
+import("//mojo/public/tools/bindings/mojom.gni")
 
 assert(is_mac, "Phase 0 is macOS only")
 
@@ -21,6 +22,10 @@ _helper_name = "Notolibra Engine Helper"
 
 group("engine") {
   deps = [ ":framework" ]
+}
+
+mojom("mojom") {
+  sources = [ "frame_agent.mojom" ]
 }
 
 source_set("engine_sources") {
@@ -40,6 +45,12 @@ source_set("engine_sources") {
     "tab_ui.mm",
     "download_delegate.cc",
     "download_delegate.h",
+    "request_filter.cc",
+    "request_filter.h",
+    "renderer/frame_agent.cc",
+    "renderer/frame_agent.h",
+    "renderer/renderer_client.cc",
+    "renderer/renderer_client.h",
   ]
   include_dirs = [ "//notolibra/api" ]
   defines = [
@@ -51,7 +62,11 @@ source_set("engine_sources") {
     "//base",
     # RenderWidgetHostViewMac, for the view bridge (patches/embedder-ns-view).
     "//content/browser:for_content_tests",
+    ":mojom",
     "//components/download/public/common:public",
+    "//mojo/public/cpp/bindings",
+    "//services/network/public/mojom",
+    "//third_party/blink/public:blink",
     "//components/embedder_support:user_agent",
     "//components/os_crypt/async/browser",
     "//components/os_crypt/async/browser:keychain_key_provider",

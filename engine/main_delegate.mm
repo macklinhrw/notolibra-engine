@@ -18,6 +18,7 @@
 #include "content/public/renderer/content_renderer_client.h"
 #include "notolibra/engine/browser_client.h"
 #include "notolibra/engine/engine.h"
+#include "notolibra/engine/renderer/renderer_client.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 
@@ -135,7 +136,7 @@ content::ContentBrowserClient* MainDelegate::CreateContentBrowserClient() {
 }
 
 content::ContentRendererClient* MainDelegate::CreateContentRendererClient() {
-  renderer_client_ = std::make_unique<content::ContentRendererClient>();
+  renderer_client_ = std::make_unique<RendererClient>();
   return renderer_client_.get();
 }
 

@@ -49,6 +49,10 @@ struct Engine {
   ne_ui_delegate ui_delegate = {};
   bool has_ui_delegate = false;
 
+  // The app's document-start scripts (ne_app_set_document_start).
+  ne_document_start_fn document_start = nullptr;
+  raw_ptr<void> document_start_data = nullptr;
+
   ne_request_id next_request_id = 1;
   struct Pending {
     raw_ptr<Tab> tab;

@@ -30,7 +30,10 @@
 #include "media/capture/mojom/video_capture_types.mojom.h"
 #include "content/browser/renderer_host/render_widget_host_view_mac.h"
 #include "notolibra/engine/engine.h"
+#include "notolibra/engine/frame_agent.mojom.h"
 #include "notolibra/engine/view_bridge.h"
+#include "mojo/public/cpp/bindings/associated_remote.h"
+#include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
 #include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
@@ -98,10 +101,17 @@ gfx::Range ImeRange(int32_t start, int32_t end) {
   return gfx::Range(static_cast<uint32_t>(start), static_cast<uint32_t>(end));
 }
 
+namespace {
+uint64_t NextTabId() {
+  static uint64_t next_id = 1;
+  return next_id++;
+}
+}  // namespace
+
 Tab::Tab(ne_tab* handle,
          content::BrowserContext* context,
          const ne_tab_config& config)
-    : handle_(handle) {
+    : handle_(handle), id_(NextTabId()) {
   content::WebContents::CreateParams params(context);
   params.initially_hidden = false;
   web_contents_ = content::WebContents::Create(params);
@@ -114,7 +124,7 @@ Tab::Tab(ne_tab* handle,
 }
 
 Tab::Tab(ne_tab* handle, std::unique_ptr<content::WebContents> contents)
-    : handle_(handle), web_contents_(std::move(contents)) {
+    : handle_(handle), id_(NextTabId()), web_contents_(std::move(contents)) {
   Init();
 }
 
@@ -827,6 +837,44 @@ void Tab::DidStartNavigation(content::NavigationHandle* navigation_handle) {
     NotifyLoadEvent(nullptr, NE_LOAD_NAVIGATION_STARTED,
                     navigation_handle->GetURL());
   }
+}
+
+void Tab::ReadyToCommitNavigation(
+    content::NavigationHandle* navigation_handle) {
+  // The frame's document-start scripts go with the commit (frame_agent.mojom):
+  // channel-associated, so they arrive before the document does.
+  Engine* engine = GetEngine();
+  if (!engine->document_start || navigation_handle->IsSameDocument() ||
+      navigation_handle->IsErrorPage()) {
+    return;
+  }
+  content::RenderFrameHost* frame = navigation_handle->GetRenderFrameHost();
+  if (!frame || !(frame->GetPage().IsPrimary() ||
+                  frame->GetLifecycleState() ==
+                      content::RenderFrameHost::LifecycleState::kPendingCommit)) {
+    return;
+  }
+  const bool is_main = navigation_handle->IsInPrimaryMainFrame();
+  const std::string url = navigation_handle->GetURL().spec();
+  const std::string top =
+      is_main ? url
+              : web_contents_->GetPrimaryMainFrame()->GetLastCommittedURL().spec();
+  const ne_frame_id id = navigation_handle->GetFrameTreeNodeId().value();
+  auto ask = [&](ne_frame_id frame_id, const std::string& frame_url,
+                 bool main) {
+    const char* script = engine->document_start(
+        engine->document_start_data.get(), handle_, frame_id,
+        {frame_url.data(), frame_url.size()}, {top.data(), top.size()}, main);
+    return script ? std::string(script) : std::string();
+  };
+  std::string script = ask(id, url, is_main);
+  std::string blank_child = ask(-1, "about:blank", false);
+  if (script.empty() && blank_child.empty()) {
+    return;
+  }
+  mojo::AssociatedRemote<mojom::FrameAgent> agent;
+  frame->GetRemoteAssociatedInterfaces()->GetInterface(&agent);
+  agent->SetDocumentStartScripts(script, blank_child);
 }
 
 void Tab::DidFinishNavigation(content::NavigationHandle* navigation_handle) {

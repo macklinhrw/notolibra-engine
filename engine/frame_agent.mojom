@@ -1,0 +1,13 @@
+// Copyright 2026 Notolibra. All rights reserved.
+
+module notolibra.mojom;
+
+// The browser's messages to one frame in its renderer, channel-associated so
+// they arrive in order with the frame's navigation.
+interface FrameAgent {
+  // Sent as the frame is about to commit a document: `script` runs in the
+  // document's main world as its script context is created, before any of
+  // the page's own scripts (scriptlets, Dark Reader). `blank_child_script`
+  // is for the about:blank frames the document creates without navigating.
+  SetDocumentStartScripts(string script, string blank_child_script);
+};

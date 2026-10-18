@@ -40,6 +40,7 @@
 #include "notolibra/engine/browser_context.h"
 #include "notolibra/engine/engine.h"
 #include "notolibra/engine/main_delegate.h"
+#include "notolibra/engine/request_filter.h"
 #include "notolibra/engine/tab.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
 
@@ -590,6 +591,25 @@ NE_EXPORT void ne_ui_respond(ne_app* app,
                              const ne_ui_response* response) {
   if (app && app->engine) {
     app->engine->Respond(id, response);
+  }
+}
+
+NE_EXPORT uint64_t ne_tab_id(ne_tab* tab) {
+  return tab ? tab->impl->id() : 0;
+}
+
+NE_EXPORT void ne_app_set_request_filter(ne_app* app,
+                                         ne_request_filter_fn fn,
+                                         void* user_data) {
+  notolibra::SetRequestFilter(fn, user_data);
+}
+
+NE_EXPORT void ne_app_set_document_start(ne_app* app,
+                                         ne_document_start_fn fn,
+                                         void* user_data) {
+  if (app && app->engine) {
+    app->engine->document_start = fn;
+    app->engine->document_start_data = user_data;
   }
 }
 
