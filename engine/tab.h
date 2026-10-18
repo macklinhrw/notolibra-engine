@@ -1,0 +1,175 @@
+// Copyright 2026 Notolibra. All rights reserved.
+//
+// One page (ne_tab). Phase 0 renders windowless: the WebContents' NSView is
+// never put in a window (as content_shell's headless web test mode does), and
+// Viz's frame capturer delivers its frames as IOSurfaces, which the app shows
+// in a pane (plan.md §2.5, off-screen compositing). Frames are held until the
+// app releases them, so there is no copy. The plan's own
+// RenderWidgetHostView (adapted from CEF's) replaces the windowless
+// RenderWidgetHostViewMac later; the API doesn't change.
+
+#ifndef NOTOLIBRA_ENGINE_TAB_H_
+#define NOTOLIBRA_ENGINE_TAB_H_
+
+#include <IOSurface/IOSurface.h>
+
+#include <map>
+#include <memory>
+#include <string>
+
+#include "base/apple/scoped_cftyperef.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
+#include "base/timer/timer.h"
+#include "components/viz/host/client_frame_sink_video_capturer.h"
+#include "content/public/browser/javascript_dialog_manager.h"
+#include "content/public/browser/web_contents_delegate.h"
+#include "content/public/browser/web_contents_observer.h"
+#include "mojo/public/cpp/bindings/remote.h"
+#include "ne_engine.h"
+#include "services/viz/privileged/mojom/compositing/frame_sink_video_capture.mojom.h"
+#include "ui/gfx/geometry/point_f.h"
+#include "ui/gfx/geometry/size.h"
+
+namespace content {
+class BrowserContext;
+class RenderWidgetHostView;
+class WebContents;
+}  // namespace content
+
+namespace notolibra {
+
+class Tab : public content::WebContentsDelegate,
+            public content::WebContentsObserver,
+            public content::JavaScriptDialogManager,
+            public viz::mojom::FrameSinkVideoConsumer {
+ public:
+  Tab(ne_tab* handle,
+      content::BrowserContext* context,
+      const ne_tab_config& config);
+  ~Tab() override;
+
+  static Tab* FromWebContents(content::WebContents* contents);
+
+  ne_tab* handle() { return handle_; }
+  content::WebContents* web_contents() { return web_contents_.get(); }
+
+  void Load(const std::string& url);
+  void SetPresenter(const ne_presenter* presenter);
+  void SetViewSize(double width, double height, double scale_factor);
+  void ReleaseFrame(uint64_t frame_id);
+  void SetVisible(bool visible);
+  void SetFocus(bool focused);
+  void SendInput(const ne_input_event& event);
+  void Edit(ne_edit_command command);
+  void Find(const std::string& text, uint32_t flags);
+  void StopFinding(bool keep_selection);
+  void Eval(const std::string& script,
+            ne_eval_reason reason,
+            ne_eval_fn done,
+            void* user_data);
+
+  // content::WebContentsDelegate:
+  void NavigationStateChanged(content::WebContents* source,
+                              content::InvalidateTypes changed_flags) override;
+  void LoadingStateChanged(content::WebContents* source,
+                           bool should_show_loading_ui) override;
+  content::WebContents* AddNewContents(
+      content::WebContents* source,
+      std::unique_ptr<content::WebContents> new_contents,
+      const GURL& target_url,
+      WindowOpenDisposition disposition,
+      const blink::mojom::WindowFeatures& window_features,
+      bool user_gesture,
+      bool* was_blocked) override;
+  void FindReply(content::WebContents* web_contents,
+                 int request_id,
+                 int number_of_matches,
+                 const gfx::Rect& selection_rect,
+                 int active_match_ordinal,
+                 bool final_update) override;
+  bool DidAddMessageToConsole(content::WebContents* source,
+                              blink::mojom::ConsoleMessageLevel log_level,
+                              const std::u16string& message,
+                              int32_t line_no,
+                              const std::u16string& source_id) override;
+  content::JavaScriptDialogManager* GetJavaScriptDialogManager(
+      content::WebContents* source) override;
+
+  // content::WebContentsObserver:
+  void RenderViewReady() override;
+  void PrimaryPageChanged(content::Page& page) override;
+  void DidFirstVisuallyNonEmptyPaint() override;
+  void TitleWasSet(content::NavigationEntry* entry) override;
+  void DidStopLoading() override;
+
+  // content::JavaScriptDialogManager:
+  void RunJavaScriptDialog(content::WebContents* web_contents,
+                           content::RenderFrameHost* render_frame_host,
+                           content::JavaScriptDialogType dialog_type,
+                           const std::u16string& message_text,
+                           const std::u16string& default_prompt_text,
+                           DialogClosedCallback callback,
+                           bool* did_suppress_message) override;
+  void RunBeforeUnloadDialog(content::WebContents* web_contents,
+                             content::RenderFrameHost* render_frame_host,
+                             bool is_reload,
+                             DialogClosedCallback callback) override;
+  void CancelDialogs(content::WebContents* web_contents,
+                     bool reset_state) override;
+
+  // viz::mojom::FrameSinkVideoConsumer:
+  void OnFrameCaptured(
+      media::mojom::VideoBufferHandlePtr data,
+      media::mojom::VideoFrameInfoPtr info,
+      const gfx::Rect& content_rect,
+      mojo::PendingRemote<viz::mojom::FrameSinkVideoConsumerFrameCallbacks>
+          callbacks) override;
+  void OnNewCaptureVersion(
+      const media::CaptureVersion& capture_version) override {}
+  void OnFrameWithEmptyRegionCapture() override {}
+  void OnStopped() override {}
+  void OnLog(const std::string& message) override;
+
+ private:
+  struct HeldFrame {
+    base::apple::ScopedCFTypeRef<IOSurfaceRef> surface;
+    mojo::Remote<viz::mojom::FrameSinkVideoConsumerFrameCallbacks> callbacks;
+  };
+
+  // (Re)starts capture if the page's view changed (cross-process navigations
+  // swap it) and a presenter is set.
+  void EnsureCapture();
+  void ApplySize();
+  void NotifyNavigationState();
+  content::RenderWidgetHostView* view();
+
+  raw_ptr<ne_tab> handle_;
+  std::unique_ptr<content::WebContents> web_contents_;
+  ne_presenter presenter_ = {};
+  bool has_presenter_ = false;
+  gfx::Size size_{800, 600};
+  double scale_factor_ = 2.0;
+
+  std::unique_ptr<viz::ClientFrameSinkVideoCapturer> capturer_;
+  raw_ptr<content::RenderWidgetHostView> captured_view_ = nullptr;
+  base::ScopedClosureRunner capture_handle_;
+  uint64_t next_frame_id_ = 1;
+  std::map<uint64_t, HeldFrame> held_frames_;
+  bool logged_unexpected_buffer_ = false;
+
+  // Wheel events without phases (a mouse wheel) get Began/Changed phases
+  // and an Ended one after a pause, as RenderWidgetHostViewMac's
+  // MouseWheelPhaseHandler adds them; Chromium's Mac scrolling needs them.
+  bool wheel_in_progress_ = false;
+  gfx::PointF last_wheel_position_;
+  base::OneShotTimer wheel_end_timer_;
+  void EndWheel();
+
+  base::WeakPtrFactory<Tab> weak_factory_{this};
+};
+
+}  // namespace notolibra
+
+#endif  // NOTOLIBRA_ENGINE_TAB_H_

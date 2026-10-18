@@ -1,0 +1,102 @@
+Reason: macOS attach mode for the UI thread (plan.md §2.4 step 3). An
+embedder that already runs -[NSApplication run] (gpui) attaches the browser's
+UI-thread task runner to that run loop instead of calling Run(), as iOS's
+MessagePumpUIApplication::Attach does. Widens the iOS-only Attach/Detach
+plumbing to macOS; Chromium's own apps never attach, and Detach is a no-op
+unless attached, so their behaviour is unchanged. Unlike iOS, the attached
+loop has no RunLoop object (run_loop.h's friend list would need a patch that
+recompiles most of the tree). No upstream bug.
+
+diff --git a/base/message_loop/message_pump_apple.mm b/base/message_loop/message_pump_apple.mm
+index 3f3d7b8e83..bfde3aa723 100644
+--- a/base/message_loop/message_pump_apple.mm
++++ b/base/message_loop/message_pump_apple.mm
+@@ -26,6 +26,7 @@
+ #include "base/metrics/histogram_samples.h"
+ #include "base/notreached.h"
+ #include "base/run_loop.h"
++#include "base/task/sequence_manager/sequence_manager_impl.h"
+ #include "base/task/task_features.h"
+ #include "base/threading/platform_thread.h"
+ #include "base/time/time.h"
+@@ -53,7 +54,7 @@ void NoOp(void* info) {}
+ bool g_not_using_cr_app = false;
+ #endif  // !BUILDFLAG(IS_IOS)
+ 
+-#if BUILDFLAG(IS_IOS)
++#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_MAC)
+ constexpr int kDefaultInitialNestingLevel = 1;
+ // Tracks the initial loop nesting level for the current thread's message pump.
+ // It is used to synchronize the pump's internal nesting state with the host
+@@ -69,7 +70,7 @@ void NoOp(void* info) {}
+ // TODO(crbug.com/516847270): Pass this via OnAttach() if we can avoid subclass
+ // specific parameter pollution on MessagePumpCFRunLoopBase.
+ thread_local std::optional<int> g_initial_nesting_level;
+-#endif  // BUILDFLAG(IS_IOS)
++#endif  // BUILDFLAG(IS_IOS) || BUILDFLAG(IS_MAC)
+ 
+ }  // namespace
+ 
+@@ -173,11 +174,11 @@ explicit OptionalAutoreleasePool(MessagePumpCFRunLoopBase* pump) {
+                                            latest_time);
+ }
+ 
+-#if BUILDFLAG(IS_IOS)
++#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_MAC)
+ void MessagePumpCFRunLoopBase::Attach(Delegate* delegate) {}
+ 
+ void MessagePumpCFRunLoopBase::Detach() {}
+-#endif  // BUILDFLAG(IS_IOS)
++#endif  // BUILDFLAG(IS_IOS) || BUILDFLAG(IS_MAC)
+ 
+ // Must be called on the run loop thread.
+ MessagePumpCFRunLoopBase::MessagePumpCFRunLoopBase() {
+@@ -283,7 +284,7 @@ explicit OptionalAutoreleasePool(MessagePumpCFRunLoopBase* pump) {
+                       std::memory_order_relaxed);
+ }
+ 
+-#if BUILDFLAG(IS_IOS)
++#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_MAC)
+ void MessagePumpCFRunLoopBase::OnAttach() {
+   CHECK_EQ(nesting_level_, 0);
+ 
+@@ -334,7 +335,7 @@ explicit OptionalAutoreleasePool(MessagePumpCFRunLoopBase* pump) {
+   //   displaying a long press context menu (CRWContextMenuController).
+   CHECK_GE(nesting_level_, 0);
+ }
+-#endif  // BUILDFLAG(IS_IOS)
++#endif  // BUILDFLAG(IS_IOS) || BUILDFLAG(IS_MAC)
+ 
+ void MessagePumpCFRunLoopBase::SetDelegate(Delegate* delegate) {
+   delegate_ = delegate;
+@@ -772,6 +773,30 @@ explicit OptionalAutoreleasePool(MessagePumpCFRunLoopBase* pump) {
+ MessagePumpNSApplication::MessagePumpNSApplication() = default;
+ MessagePumpNSApplication::~MessagePumpNSApplication() = default;
+ 
++void MessagePumpNSApplication::Attach(Delegate* delegate) {
++  CHECK(!attached_);
++  CHECK(NSApp.running) << "attach from inside -[NSApplication run]";
++  attached_ = true;
++  SetDelegate(delegate);
++  OnAttach();
++}
++
++void MessagePumpNSApplication::Detach() {
++  if (!attached_) {
++    return;
++  }
++  attached_ = false;
++  SetDelegate(nullptr);
++  OnDetach();
++}
++
++void AttachCurrentUIThreadToNSApplicationLoop() {
++  auto* sequence_manager =
++      sequence_manager::internal::SequenceManagerImpl::GetCurrent();
++  CHECK(sequence_manager);
++  sequence_manager->AttachToMessagePump();
++}
++
+ void MessagePumpNSApplication::DoRun(Delegate* delegate) {
+   bool last_running_own_loop = running_own_loop_;
+ 

@@ -1,0 +1,18 @@
+#!/bin/zsh
+# Builds and runs smoke.mm against out/Dev/NotolibraEngine.framework, hidden.
+set -uo pipefail
+ENGINE=${0:A:h:h:h}
+SRC=${ENGINE:h}
+out=${1:-$SRC/out/Dev}
+bin=$out/notolibra_engine_smoke
+"$SRC/third_party/llvm-build/Release+Asserts/bin/clang++" -std=c++20 -fobjc-arc -O1 \
+  -isysroot "$SRC/build/mac_files/xcode_binaries/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk" \
+  -mmacos-version-min=13.0 -I "$ENGINE/api" -F "$out" -framework NotolibraEngine \
+  -framework AppKit -framework IOSurface -Wl,-rpath,"$out" \
+  "$ENGINE/test/engine/smoke.mm" -o "$bin" || exit 1
+mkdir -p "$out/logs"
+log="$out/logs/engine-smoke-$(date +%Y%m%d-%H%M%S).log"
+"$bin" 2> "$log"
+rc=$?
+echo "--- exit $rc; engine log $log ($(wc -l < "$log") lines)"
+exit $rc

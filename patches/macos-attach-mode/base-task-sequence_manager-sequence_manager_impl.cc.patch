@@ -1,0 +1,32 @@
+Reason: macOS attach mode for the UI thread (plan.md §2.4 step 3). An
+embedder that already runs -[NSApplication run] (gpui) attaches the browser's
+UI-thread task runner to that run loop instead of calling Run(), as iOS's
+MessagePumpUIApplication::Attach does. Widens the iOS-only Attach/Detach
+plumbing to macOS; Chromium's own apps never attach, and Detach is a no-op
+unless attached, so their behaviour is unchanged. Unlike iOS, the attached
+loop has no RunLoop object (run_loop.h's friend list would need a patch that
+recompiles most of the tree). No upstream bug.
+
+diff --git a/base/task/sequence_manager/sequence_manager_impl.cc b/base/task/sequence_manager/sequence_manager_impl.cc
+index a938447289..5838aed4d2 100644
+--- a/base/task/sequence_manager/sequence_manager_impl.cc
++++ b/base/task/sequence_manager/sequence_manager_impl.cc
+@@ -186,7 +186,8 @@ SequenceManagerImpl::~SequenceManagerImpl() {
+     ScopedBestEffortExecutionFence::RemoveSequenceManager(this);
+   }
+ 
+-#if BUILDFLAG(IS_IOS)
++#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_MAC)
++  // On macOS this does nothing unless an embedder attached the pump.
+   if (settings_.message_loop_type == MessagePumpType::UI &&
+       associated_thread_->IsBound()) {
+     controller_->DetachFromMessagePump();
+@@ -1009,7 +1010,7 @@ bool SequenceManagerImpl::IsTaskExecutionAllowedInNativeNestedLoop() const {
+   return controller_->IsTaskExecutionAllowed();
+ }
+ 
+-#if BUILDFLAG(IS_IOS)
++#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_MAC)
+ void SequenceManagerImpl::AttachToMessagePump() {
+   return controller_->AttachToMessagePump();
+ }

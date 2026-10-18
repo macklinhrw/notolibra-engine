@@ -10,3 +10,12 @@ media-audiotoolbox-aac/media-base-supported_types.cc.patch
 # disabled: chromium-src/build-config-BUILDCONFIG.gn.patch
 media-audiotoolbox-aac/media-filters-audio_decoder_unittest.cc.patch
 media-audiotoolbox-aac/media-ffmpeg-ffmpeg_common.cc.patch
+macos-attach-mode/base-message_loop-message_pump_apple.h.patch
+macos-attach-mode/base-message_loop-message_pump_apple.mm.patch
+macos-attach-mode/base-task-sequence_manager-thread_controller.h.patch
+macos-attach-mode/base-task-sequence_manager-thread_controller_with_message_pump_impl.h.patch
+macos-attach-mode/base-task-sequence_manager-thread_controller_with_message_pump_impl.cc.patch
+macos-attach-mode/base-task-sequence_manager-sequence_manager_impl.h.patch
+macos-attach-mode/base-task-sequence_manager-sequence_manager_impl.cc.patch
+embedder-run-loop/content-public-app-content_main.h.patch
+embedder-run-loop/content-app-content_main.cc.patch

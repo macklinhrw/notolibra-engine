@@ -1,0 +1,24 @@
+Reason: lets an embedder host the browser process in its own, already
+running run loop: ContentMainParams::embedder_owns_run_loop makes
+RunContentProcess() return without ContentMainRunner::Shutdown() (the
+embedder calls it at quit) and without handing BrowserMainLoop a pointer to
+its stack autorelease pool, which would dangle. Default false: unchanged for
+Chromium's apps. Used by notolibra/engine (plan.md §2.4). No upstream bug.
+
+diff --git a/content/public/app/content_main.h b/content/public/app/content_main.h
+index abbb4f4ccc..e23a1bd704 100644
+--- a/content/public/app/content_main.h
++++ b/content/public/app/content_main.h
+@@ -66,6 +66,12 @@ struct CONTENT_EXPORT ContentMainParams {
+   // are left uninitialized.
+   bool minimal_browser_mode = false;
+ 
++  // For embedders that host the browser process in their own, already running
++  // UI run loop: the delegate's RunProcess() starts BrowserMainRunner without
++  // running it, RunContentProcess() returns without shutting down, and the
++  // embedder calls ContentMainRunner::Shutdown() when it quits.
++  bool embedder_owns_run_loop = false;
++
+ #if BUILDFLAG(IS_MAC)
+   // The outermost autorelease pool to pass to main entry points.
+   STACK_ALLOCATED_IGNORE("https://crbug.com/1424190")

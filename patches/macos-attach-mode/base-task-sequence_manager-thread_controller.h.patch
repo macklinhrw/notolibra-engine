@@ -1,0 +1,30 @@
+Reason: macOS attach mode for the UI thread (plan.md §2.4 step 3). An
+embedder that already runs -[NSApplication run] (gpui) attaches the browser's
+UI-thread task runner to that run loop instead of calling Run(), as iOS's
+MessagePumpUIApplication::Attach does. Widens the iOS-only Attach/Detach
+plumbing to macOS; Chromium's own apps never attach, and Detach is a no-op
+unless attached, so their behaviour is unchanged. Unlike iOS, the attached
+loop has no RunLoop object (run_loop.h's friend list would need a patch that
+recompiles most of the tree). No upstream bug.
+
+diff --git a/base/task/sequence_manager/thread_controller.h b/base/task/sequence_manager/thread_controller.h
+index b857eb5af4..6765e4ad87 100644
+--- a/base/task/sequence_manager/thread_controller.h
++++ b/base/task/sequence_manager/thread_controller.h
+@@ -133,14 +133,14 @@ class BASE_EXPORT ThreadController {
+   // Returns true if the current run loop should quit when idle.
+   virtual bool ShouldQuitRunLoopWhenIdle() = 0;
+ 
+-#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_ANDROID)
++#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_MAC)
+   // On iOS, the main message loop cannot be Run().  Instead call
+   // AttachToMessagePump(), which connects this ThreadController to the
+   // UI thread's CFRunLoop and allows PostTask() to work.
+   virtual void AttachToMessagePump() = 0;
+ #endif
+ 
+-#if BUILDFLAG(IS_IOS)
++#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_MAC)
+   // Detaches this ThreadController from the message pump, allowing the
+   // controller to be shut down cleanly.
+   virtual void DetachFromMessagePump() = 0;

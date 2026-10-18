@@ -39,3 +39,6 @@ enable_platform_hevc = true
 enable_hevc_parser_and_hw_decoder = true
 enable_mse_mpeg2ts_stream_parser = true
 enable_widevine = false               # until the Widevine licence (phase 7)
+
+# Our engine targets (//notolibra/engine), reachable from //:gn_all.
+root_extra_deps = [ "//notolibra/engine" ]

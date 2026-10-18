@@ -1,0 +1,44 @@
+Reason: macOS attach mode for the UI thread (plan.md §2.4 step 3). An
+embedder that already runs -[NSApplication run] (gpui) attaches the browser's
+UI-thread task runner to that run loop instead of calling Run(), as iOS's
+MessagePumpUIApplication::Attach does. Widens the iOS-only Attach/Detach
+plumbing to macOS; Chromium's own apps never attach, and Detach is a no-op
+unless attached, so their behaviour is unchanged. Unlike iOS, the attached
+loop has no RunLoop object (run_loop.h's friend list would need a patch that
+recompiles most of the tree). No upstream bug.
+
+diff --git a/base/task/sequence_manager/sequence_manager_impl.h b/base/task/sequence_manager/sequence_manager_impl.h
+index 4505d8a609..d731be926d 100644
+--- a/base/task/sequence_manager/sequence_manager_impl.h
++++ b/base/task/sequence_manager/sequence_manager_impl.h
+@@ -53,6 +53,11 @@
+ 
+ namespace base {
+ 
++#if BUILDFLAG(IS_MAC)
++// message_pump_apple.h; a friend below.
++BASE_EXPORT void AttachCurrentUIThreadToNSApplicationLoop();
++#endif
++
+ namespace internal {
+ class SequenceManagerThreadDelegate;
+ }
+@@ -167,7 +172,7 @@ class BASE_EXPORT SequenceManagerImpl
+   void SetAddQueueTimeToTasks(bool enable);
+   void SetTaskExecutionAllowedInNativeNestedLoop(bool allowed);
+   bool IsTaskExecutionAllowedInNativeNestedLoop() const;
+-#if BUILDFLAG(IS_IOS)
++#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_MAC)
+   void AttachToMessagePump();
+ #endif
+   bool IsIdleForTesting() override;
+@@ -221,6 +226,9 @@ class BASE_EXPORT SequenceManagerImpl
+   // Only to be used by CurrentThread for the moment
+   static SequenceManagerImpl* GetCurrent();
+   friend class ::base::CurrentThread;
++#if BUILDFLAG(IS_MAC)
++  friend void ::base::AttachCurrentUIThreadToNSApplicationLoop();
++#endif
+ 
+   // Factory friends to call into private creation methods.
+   friend std::unique_ptr<SequenceManager>
