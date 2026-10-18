@@ -1,0 +1,5 @@
+# Matches GPUI Fast's own toolchain (longbridge/gpui-fast rust-toolchain.toml).
+[toolchain]
+channel = "1.98.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

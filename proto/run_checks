@@ -1,0 +1,13 @@
+#!/bin/zsh
+# Builds the prototype and runs the Phase 0 checks in a hidden window
+# (off-screen, Accessory activation policy, muted). NOTOLIBRA_PROTO_TWITCH=1
+# adds the Twitch playback check (network).
+set -uo pipefail
+cd ${0:A:h}
+CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-4} cargo build -q 2>&1 | grep -E '^error' -A6
+out=${NOTOLIBRA_ENGINE_OUT:-$HOME/chromium/src/out/Dev}
+log=$out/logs/proto-checks-$(date +%Y%m%d-%H%M%S).log
+NOTOLIBRA_PROTO_CHECK=1 ./target/debug/notolibra-engine-proto 2> "$log"
+rc=$?
+echo "--- exit $rc; engine and gpui log $log"
+exit $rc
