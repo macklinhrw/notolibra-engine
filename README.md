@@ -18,7 +18,7 @@ app repository; section numbers below refer to it. Private; proprietary.
 | `build/config/BUILD.gn` | The `chromium_src` override config (§4.3). |
 | `chromium_src/` | Overrides, mirroring Chromium's paths (none yet). |
 | `patches/series` | Quilt-style series of the upstream patches we can't avoid (§4.4). |
-| App integration | The Notolibra app's `native/crates/engine_sys` (bindings, loaded with dlopen) and `native/crates/app/src/engine_notolibra.rs` (the browser pane's backend); `NOTOLIBRA_BROWSER_ENGINE=notolibra`. |
+| App integration | The Notolibra app's `native/crates/engine_sys` (bindings, loaded with dlopen) and `native/crates/app/src/engine_notolibra.rs` (the browser pane's backend). The app's only browser engine since October 18, 2026, when it replaced CEF. Unsigned app builds pass an empty keychain service (mock keychain); builds signed with a Team ID name the engine's item. |
 | `scripts/` | `sync`, `build`, `patches.py`, `clt-xcode`, `redirect_cc`. |
 | `test/media/` | The Phase 0 media check (§6, check 6), run hidden. |
 | `docs/xcode.md` | What the macOS build needs from Xcode, and how it builds without it. |
