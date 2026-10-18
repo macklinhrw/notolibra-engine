@@ -92,6 +92,19 @@ bool ViewBridge::IsCurrent() const {
                       static_cast<content::RenderWidgetHostView*>(view_.get());
 }
 
+void ViewBridge::SetFocus(bool focused) {
+  if (!view_) {
+    return;
+  }
+  if (focused) {
+    view_->OnWindowIsKeyChanged(true);
+    view_->OnFirstResponderChanged(true);
+  } else {
+    view_->OnFirstResponderChanged(false);
+    view_->OnWindowIsKeyChanged(false);
+  }
+}
+
 // Input methods ------------------------------------------------------------
 
 void ViewBridge::ImeSetComposition(const std::u16string& text,
@@ -107,6 +120,8 @@ void ViewBridge::ImeSetComposition(const std::u16string& text,
   spans.emplace_back(ui::ImeTextSpan::Type::kComposition, 0, text.size(),
                      ui::ImeTextSpan::Thickness::kThin,
                      ui::ImeTextSpan::UnderlineStyle::kSolid);
+  VLOG(1) << "IME: composition " << text.size() << " units, input type "
+          << text_input_type_;
   view_->ImeSetComposition(text, spans, replacement, selection_start,
                            selection_end);
 }

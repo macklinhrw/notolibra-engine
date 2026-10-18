@@ -230,13 +230,13 @@ NE_EXPORT ne_status ne_app_init(const ne_app_config* config,
   }
   engine.keychain_service = ToString(config->keychain_service);
 
-  // argv[0] is the host's executable. Phase 0 runs without the sandbox, as
-  // today's CEF pane does. Cookies are encrypted with the key in the app's
-  // own keychain item (keychain_service); without one (verification runs)
-  // the keychain is a mock and nothing reaches the user's keychain.
+  // argv[0] is the host's executable. Child processes run in Chromium's
+  // macOS sandbox (helper_main.cc); a caller may still pass --no-sandbox.
+  // Cookies are encrypted with the key in the app's own keychain item
+  // (keychain_service); without one (verification runs) the keychain is a
+  // mock and nothing reaches the user's keychain.
   NSString* executable = NSProcessInfo.processInfo.arguments.firstObject;
   engine.argv_storage.push_back(base::SysNSStringToUTF8(executable));
-  engine.argv_storage.push_back("--no-sandbox");
   if (engine.keychain_service.empty()) {
     engine.argv_storage.push_back("--use-mock-keychain");
   }

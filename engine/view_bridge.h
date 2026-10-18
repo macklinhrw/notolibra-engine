@@ -61,6 +61,11 @@ class ViewBridge : public remote_cocoa::mojom::RenderWidgetHostNSView,
   void ImeCancel();
   bool CaretRect(ne_rect* out_rect);
 
+  // Focus as AppKit would report it for a view in the key window: the
+  // window is key and the view first responder (or neither). This is what
+  // gives the page focus (document.hasFocus()) and input methods a target.
+  void SetFocus(bool focused);
+
   // remote_cocoa::mojom::RenderWidgetHostNSView:
   void InitAsPopup(const gfx::Rect& content_rect,
                    uint64_t popup_parent_ns_view_id) override;

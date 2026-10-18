@@ -225,6 +225,7 @@ mac_app_bundle("helper_app") {
   deps = [
     ":framework+link_nested",
     "//base/allocator:early_zone_registration_apple",
+    "//sandbox/mac:seatbelt",
   ]
   if (is_component_build) {
     # NotolibraEngine.framework/Versions/A/Helpers/<helper>.app/Contents/MacOS:

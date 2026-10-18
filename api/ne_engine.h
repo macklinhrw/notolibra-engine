@@ -359,7 +359,16 @@ typedef struct ne_input_event {
   int32_t momentum_phase;
   /* Phase 1: the characters ignoring modifiers, for key events. */
   ne_string_view unmodified_text;
+  /* Phase 1: ne_input_flags. */
+  uint32_t flags;
 } ne_input_event;
+
+/* Phase 1: ne_input_event's flags. */
+typedef enum ne_input_flags {
+  /* A key press whose text the app sends itself (NE_INPUT_CHAR, or an input
+   * method's ne_tab_ime_commit), as AppKit views do through -insertText:. */
+  NE_INPUT_FLAG_NO_CHAR = 1 << 0,
+} ne_input_flags;
 
 NE_EXPORT void ne_tab_send_input(ne_tab* tab, const ne_input_event* event);
 NE_EXPORT void ne_tab_set_focus(ne_tab* tab, bool focused);

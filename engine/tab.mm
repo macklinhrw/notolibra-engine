@@ -239,6 +239,8 @@ void Tab::ImeSetComposition(const std::u16string& text,
   if (ViewBridge* bridge = current_bridge()) {
     bridge->ImeSetComposition(text, selection_start, selection_end,
                               replacement);
+  } else {
+    LOG(WARNING) << "IME: the page has no view bridge";
   }
 }
 
@@ -404,6 +406,10 @@ void Tab::SetFocus(bool focused) {
   if (!rwhv) {
     return;
   }
+  if (ViewBridge* bridge = current_bridge()) {
+    bridge->SetFocus(focused);
+    return;
+  }
   // As headless web tests do: there is no window to make the view first
   // responder, so tell the widget directly.
   content::RenderWidgetHost* host = rwhv->GetRenderWidgetHost();
@@ -517,7 +523,8 @@ void Tab::SendInput(const ne_input_event& event) {
       const unichar first = text.length > 0 ? [text characterAtIndex:0] : 0;
       const bool function_key = first >= 0xF700 && first <= 0xF8FF;
       if (event.kind == NE_INPUT_KEY_DOWN && text.length > 0 && !function_key &&
-          !(event.modifiers & (2 | 8))) {
+          !(event.modifiers & (2 | 8)) &&
+          !(event.flags & NE_INPUT_FLAG_NO_CHAR)) {
         input::NativeWebKeyboardEvent char_event(gfx::NativeEvent{ns_event});
         char_event.SetType(blink::WebInputEvent::Type::kChar);
         host->ForwardKeyboardEvent(char_event);

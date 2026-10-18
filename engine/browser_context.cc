@@ -6,6 +6,7 @@
 
 #include "base/files/file_util.h"
 #include "base/strings/string_util.h"
+#include "content/public/browser/download_manager.h"
 #include "content/public/browser/permission_request_description.h"
 #include "content/public/browser/permission_result.h"
 #include "content/public/browser/render_frame_host.h"
@@ -252,7 +253,10 @@ bool SslHostState::HasAllowExceptionForAnyHost(
 BrowserContext::BrowserContext(const base::FilePath& path) : path_(path) {}
 
 BrowserContext::~BrowserContext() {
+  // The download manager calls its delegate as it shuts down, which the
+  // base class's destructor would do after download_delegate_ is gone.
   if (download_delegate_) {
+    GetDownloadManager()->Shutdown();
     download_delegate_->Shutdown();
   }
   NotifyWillBeDestroyed();
