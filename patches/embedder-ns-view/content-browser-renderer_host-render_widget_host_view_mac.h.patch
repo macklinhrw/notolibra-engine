@@ -1,0 +1,24 @@
+Reason: an off-screen embedder (notolibra/engine's view bridge, plan.md §2.5)
+receives RenderWidgetHostViewMac's NSView calls itself: cursors, <select>
+popups and IME state arrive as data, and the rest pass on to the in-process
+NSView. RenderWidgetHostViewMac::SetEmbedderNSView sets ns_view_, the
+pointer Chromium already uses for remote (app shim) NSViews. No upstream bug.
+
+diff --git a/content/browser/renderer_host/render_widget_host_view_mac.h b/content/browser/renderer_host/render_widget_host_view_mac.h
+index 2126c6c61e..0fe80e235e 100644
+--- a/content/browser/renderer_host/render_widget_host_view_mac.h
++++ b/content/browser/renderer_host/render_widget_host_view_mac.h
+@@ -122,6 +122,13 @@ class CONTENT_EXPORT RenderWidgetHostViewMac
+     return ns_view_;
+   }
+ 
++  // For embedders that show the view off screen: routes the view's calls to
++  // |view| in place of the in-process NSView's bridge (or back to it when
++  // null), and returns that bridge, for the calls |view| passes on. |view|
++  // must outlive its use here (until it is unset or this view shuts down).
++  remote_cocoa::mojom::RenderWidgetHostNSView* SetEmbedderNSView(
++      remote_cocoa::mojom::RenderWidgetHostNSView* view);
++
+   // |delegate| is used to separate out the logic from the NSResponder delegate.
+   // |delegate| is retained by this class.
+   // |delegate| should be set at most once.

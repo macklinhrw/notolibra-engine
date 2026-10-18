@@ -35,6 +35,11 @@ source_set("engine_sources") {
     "main_delegate.mm",
     "tab.h",
     "tab.mm",
+    "view_bridge.h",
+    "view_bridge.mm",
+    "tab_ui.mm",
+    "download_delegate.cc",
+    "download_delegate.h",
   ]
   include_dirs = [ "//notolibra/api" ]
   defines = [
@@ -44,7 +49,17 @@ source_set("engine_sources") {
   ]
   deps = [
     "//base",
+    # RenderWidgetHostViewMac, for the view bridge (patches/embedder-ns-view).
+    "//content/browser:for_content_tests",
+    "//components/download/public/common:public",
     "//components/embedder_support:user_agent",
+    "//components/os_crypt/async/browser",
+    "//components/os_crypt/async/browser:keychain_key_provider",
+    "//components/os_crypt/common:keychain_password_mac",
+    "//net",
+    "//services/network/public/cpp",
+    "//skia",
+    "//ui/base/clipboard",
     "//components/input",
     "//components/viz/host",
     "//content/public/app",
@@ -59,6 +74,7 @@ source_set("engine_sources") {
     "//ui/display",
     "//ui/events",
     "//ui/gfx",
+    "//ui/gfx/range",
     "//url",
   ]
   frameworks = [

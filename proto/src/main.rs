@@ -420,7 +420,8 @@ fn start_engine() -> Option<*mut ne_app> {
         framework_dir: ne_string_view::from(""),
         user_data_dir: ne_string_view::from(&profile),
         locale: ne_string_view::from("en-US"),
-        keychain_service: ne_string_view::from("Notolibra Engine Proto"),
+        // Empty: a mock keychain (hidden checks never touch the user's keychain).
+        keychain_service: ne_string_view::from(""),
         argc: args.len() as i32,
         argv: args.as_ptr(),
     };

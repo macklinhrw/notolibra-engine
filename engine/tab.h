@@ -23,7 +23,12 @@
 #include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
 #include "components/viz/host/client_frame_sink_video_capturer.h"
+#include "content/public/browser/context_menu_params.h"
+#include "content/public/browser/file_select_listener.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/javascript_dialog_manager.h"
+#include "third_party/blink/public/mojom/choosers/file_chooser.mojom.h"
+#include "third_party/blink/public/mojom/favicon/favicon_url.mojom.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -31,6 +36,7 @@
 #include "services/viz/privileged/mojom/compositing/frame_sink_video_capture.mojom.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/gfx/range/range.h"
 
 namespace content {
 class BrowserContext;
@@ -40,6 +46,11 @@ class WebContents;
 
 namespace notolibra {
 
+class ViewBridge;
+
+// A replacement range from the API (-1, -1: none).
+gfx::Range ImeRange(int32_t start, int32_t end);
+
 class Tab : public content::WebContentsDelegate,
             public content::WebContentsObserver,
             public content::JavaScriptDialogManager,
@@ -48,6 +59,8 @@ class Tab : public content::WebContentsDelegate,
   Tab(ne_tab* handle,
       content::BrowserContext* context,
       const ne_tab_config& config);
+  // Adopts a page Chromium created (window.open, target=_blank).
+  Tab(ne_tab* handle, std::unique_ptr<content::WebContents> contents);
   ~Tab() override;
 
   static Tab* FromWebContents(content::WebContents* contents);
@@ -76,6 +89,27 @@ class Tab : public content::WebContentsDelegate,
                    void* user_data);
   void ForEachFrame(ne_frame_fn fn, void* user_data);
 
+  // Input methods, through the page's view bridge.
+  void ImeSetComposition(const std::u16string& text,
+                         int selection_start,
+                         int selection_end,
+                         const gfx::Range& replacement);
+  void ImeCommit(const std::u16string& text, const gfx::Range& replacement);
+  void ImeFinish();
+  void ImeCancel();
+  bool ImeCaretRect(ne_rect* out_rect);
+
+  // The page's view on screen (the primary main frame's), or null.
+  content::RenderWidgetHostView* view();
+
+  // From the view bridge (view_bridge.h), for the page on screen.
+  void NotifyCursor(int kind);
+  void NotifyTextInputState(int32_t type, uint32_t flags);
+  void NotifyImeCancel();
+  void NotifyTooltip(const std::string& text);
+  // `bridge`'s widget is gone; the bridge is deleted soon.
+  void ViewBridgeGone(ViewBridge* bridge);
+
   // content::WebContentsDelegate:
   void NavigationStateChanged(content::WebContents* source,
                               content::InvalidateTypes changed_flags) override;
@@ -102,9 +136,16 @@ class Tab : public content::WebContentsDelegate,
                               const std::u16string& source_id) override;
   content::JavaScriptDialogManager* GetJavaScriptDialogManager(
       content::WebContents* source) override;
+  void RunFileChooser(content::RenderFrameHost* render_frame_host,
+                      scoped_refptr<content::FileSelectListener> listener,
+                      const blink::mojom::FileChooserParams& params) override;
+  bool HandleContextMenu(content::RenderFrameHost& render_frame_host,
+                         const content::ContextMenuParams& params) override;
 
   // content::WebContentsObserver:
   void RenderViewReady() override;
+  void RenderFrameHostChanged(content::RenderFrameHost* old_host,
+                              content::RenderFrameHost* new_host) override;
   void PrimaryPageChanged(content::Page& page) override;
   void DidFirstVisuallyNonEmptyPaint() override;
   void TitleWasSet(content::NavigationEntry* entry) override;
@@ -116,6 +157,10 @@ class Tab : public content::WebContentsDelegate,
   void DidFinishLoad(content::RenderFrameHost* render_frame_host,
                      const GURL& validated_url) override;
   void OnBackgroundColorChanged() override;
+  void DidUpdateFaviconURL(
+      content::RenderFrameHost* render_frame_host,
+      const std::vector<blink::mojom::FaviconURLPtr>& candidates,
+      blink::mojom::FaviconUpdateReason reason) override;
   void OnDidAddMessageToConsole(
       content::RenderFrameHost* source_frame,
       blink::mojom::ConsoleMessageLevel log_level,
@@ -160,13 +205,25 @@ class Tab : public content::WebContentsDelegate,
 
   // (Re)starts capture if the page's view changed (cross-process navigations
   // swap it) and a presenter is set.
+  // Shared by both constructors.
+  void Init();
+  void RunContextCommand(int command,
+                         content::GlobalRenderFrameHostId frame,
+                         const content::ContextMenuParams& params);
+  void FaviconDownloaded(int id,
+                         int http_status_code,
+                         const GURL& image_url,
+                         const std::vector<SkBitmap>& bitmaps,
+                         const std::vector<gfx::Size>& sizes);
   void EnsureCapture();
   void ApplySize();
   void NotifyNavigationState();
   void NotifyLoadEvent(content::RenderFrameHost* frame,
                        ne_load_event_kind kind,
                        const GURL& url);
-  content::RenderWidgetHostView* view();
+  // Puts a view bridge on the page's view if it has none yet.
+  void EnsureViewBridge();
+  ViewBridge* current_bridge();
   // The frame `id` names (0: the main frame), or null.
   content::RenderFrameHost* FindFrame(ne_frame_id id);
 
@@ -183,6 +240,9 @@ class Tab : public content::WebContentsDelegate,
   uint64_t next_frame_id_ = 1;
   std::map<uint64_t, HeldFrame> held_frames_;
   bool logged_unexpected_buffer_ = false;
+  // One bridge per page view still alive (pages in the back-forward cache
+  // keep theirs), by widget.
+  std::map<content::RenderWidgetHost*, std::unique_ptr<ViewBridge>> bridges_;
   // Whether the app consumed the console message the observer saw last; the
   // delegate's DidAddMessageToConsole, called right after, returns it.
   bool console_consumed_ = false;

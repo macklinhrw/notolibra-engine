@@ -12,6 +12,8 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/zoom_level_delegate.h"
+#include "net/cert/x509_certificate.h"
+#include "notolibra/engine/download_delegate.h"
 #include "notolibra/engine/engine.h"
 #include "notolibra/engine/tab.h"
 #include "third_party/blink/public/common/permissions/permission_utils.h"
@@ -150,10 +152,109 @@ void PermissionManager::ResetPermission(blink::PermissionType permission,
                   static_cast<int>(permission)});
 }
 
+SslHostState::SslHostState() = default;
+SslHostState::~SslHostState() = default;
+
+namespace {
+std::string Fingerprint(const net::X509Certificate& cert) {
+  net::SHA256HashValue hash = cert.CalculateChainFingerprint256();
+  return std::string(reinterpret_cast<const char*>(hash.data()), hash.size());
+}
+}  // namespace
+
+void SslHostState::AllowCert(const std::string& host,
+                             const net::X509Certificate& cert,
+                             net::Error error,
+                             content::StoragePartition* storage_partition) {
+  allowed_.insert({host, Fingerprint(cert), error});
+}
+
+void SslHostState::Clear(
+    base::RepeatingCallback<bool(const std::string&)> host_filter) {
+  auto matches = [&](const std::string& host) {
+    return host_filter.is_null() || host_filter.Run(host);
+  };
+  std::erase_if(allowed_, [&](const auto& entry) {
+    return matches(std::get<0>(entry));
+  });
+  std::erase_if(http_allowed_, matches);
+}
+
+content::SSLHostStateDelegate::CertJudgment SslHostState::QueryPolicy(
+    const std::string& host,
+    const net::X509Certificate& cert,
+    net::Error error,
+    content::StoragePartition* storage_partition) {
+  return allowed_.contains({host, Fingerprint(cert), error}) ? ALLOWED
+                                                             : DENIED;
+}
+
+void SslHostState::HostRanInsecureContent(const std::string& host,
+                                          InsecureContentType content_type) {
+  insecure_content_.insert({host, static_cast<int>(content_type)});
+}
+
+bool SslHostState::DidHostRunInsecureContent(const std::string& host,
+                                             InsecureContentType content_type) {
+  return insecure_content_.contains({host, static_cast<int>(content_type)});
+}
+
+void SslHostState::AllowHttpForHost(
+    const std::string& host,
+    content::StoragePartition* storage_partition) {
+  http_allowed_.insert(host);
+}
+
+bool SslHostState::IsHttpAllowedForHost(
+    const std::string& host,
+    content::StoragePartition* storage_partition) {
+  return http_allowed_.contains(host);
+}
+
+void SslHostState::RevokeUserAllowExceptions(const std::string& host) {
+  std::erase_if(allowed_,
+                [&](const auto& entry) { return std::get<0>(entry) == host; });
+  http_allowed_.erase(host);
+}
+
+void SslHostState::SetHttpsEnforcementForHost(
+    const std::string& host,
+    bool enforce,
+    content::StoragePartition* storage_partition) {
+  if (enforce) {
+    https_enforced_.insert(host);
+  } else {
+    https_enforced_.erase(host);
+  }
+}
+
+bool SslHostState::IsHttpsEnforcedForUrl(
+    const GURL& url,
+    content::StoragePartition* storage_partition) {
+  return https_enforced_.contains(url.GetHost());
+}
+
+bool SslHostState::HasAllowException(
+    const std::string& host,
+    content::StoragePartition* storage_partition) {
+  return http_allowed_.contains(host) ||
+         std::any_of(allowed_.begin(), allowed_.end(), [&](const auto& entry) {
+           return std::get<0>(entry) == host;
+         });
+}
+
+bool SslHostState::HasAllowExceptionForAnyHost(
+    content::StoragePartition* storage_partition) {
+  return !allowed_.empty() || !http_allowed_.empty();
+}
+
 // ne_app_init() creates the directory, before IO is disallowed here.
 BrowserContext::BrowserContext(const base::FilePath& path) : path_(path) {}
 
 BrowserContext::~BrowserContext() {
+  if (download_delegate_) {
+    download_delegate_->Shutdown();
+  }
   NotifyWillBeDestroyed();
   ShutdownStoragePartitions();
 }
@@ -172,7 +273,16 @@ bool BrowserContext::IsOffTheRecord() {
 }
 
 content::DownloadManagerDelegate* BrowserContext::GetDownloadManagerDelegate() {
-  return nullptr;
+  if (!download_delegate_) {
+    download_delegate_ = std::make_unique<DownloadDelegate>(this);
+  }
+  return download_delegate_.get();
+}
+
+void BrowserContext::CancelDownload(uint32_t id) {
+  if (download_delegate_) {
+    download_delegate_->Cancel(id);
+  }
 }
 
 content::BrowserPluginGuestManager* BrowserContext::GetGuestManager() {
@@ -198,7 +308,10 @@ BrowserContext::GetStorageNotificationService() {
 }
 
 content::SSLHostStateDelegate* BrowserContext::GetSSLHostStateDelegate() {
-  return nullptr;
+  if (!ssl_host_state_) {
+    ssl_host_state_ = std::make_unique<SslHostState>();
+  }
+  return ssl_host_state_.get();
 }
 
 content::PermissionControllerDelegate*

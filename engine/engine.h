@@ -60,10 +60,16 @@ struct Engine {
 
   // Sends `request` to the app (filling in its id) and remembers `callback`.
   // Without a UI delegate the callback runs at once with a null response.
-  void SendUiRequest(ne_ui_request& request, Tab* tab,
-                     UiResponseCallback callback);
+  // Returns the request's id.
+  ne_request_id SendUiRequest(ne_ui_request& request, Tab* tab,
+                              UiResponseCallback callback);
   // Runs a pending request's callback with `response` (null: declined).
   void Respond(ne_request_id id, const ne_ui_response* response);
+  // Withdraws one pending request: tells the app and declines it.
+  void CancelRequest(ne_request_id id);
+  bool IsPending(ne_request_id id) const {
+    return pending_requests.contains(id);
+  }
   // Cancels a tab's pending requests (navigation, close): tells the app and
   // declines them.
   void CancelRequestsFor(Tab* tab);

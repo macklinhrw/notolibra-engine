@@ -13,6 +13,7 @@
 #include "base/logging.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/sequenced_task_runner.h"
 #include "components/input/native_web_keyboard_event.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/host_zoom_map.h"
@@ -27,7 +28,9 @@
 #include "content/public/common/isolated_world_ids.h"
 #include "media/capture/mojom/video_capture_buffer.mojom.h"
 #include "media/capture/mojom/video_capture_types.mojom.h"
+#include "content/browser/renderer_host/render_widget_host_view_mac.h"
 #include "notolibra/engine/engine.h"
+#include "notolibra/engine/view_bridge.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
 #include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
@@ -88,6 +91,13 @@ std::string ToString(ne_string_view view) {
 
 }  // namespace
 
+gfx::Range ImeRange(int32_t start, int32_t end) {
+  if (start < 0 || end < start) {
+    return gfx::Range::InvalidRange();
+  }
+  return gfx::Range(static_cast<uint32_t>(start), static_cast<uint32_t>(end));
+}
+
 Tab::Tab(ne_tab* handle,
          content::BrowserContext* context,
          const ne_tab_config& config)
@@ -95,11 +105,22 @@ Tab::Tab(ne_tab* handle,
   content::WebContents::CreateParams params(context);
   params.initially_hidden = false;
   web_contents_ = content::WebContents::Create(params);
-  web_contents_->SetDelegate(this);
-  Observe(web_contents_.get());
   if (config.background_color_argb) {
     web_contents_->SetPageBaseBackgroundColor(config.background_color_argb);
   }
+  Init();
+  std::string url = ToString(config.url);
+  Load(url.empty() ? "about:blank" : url);
+}
+
+Tab::Tab(ne_tab* handle, std::unique_ptr<content::WebContents> contents)
+    : handle_(handle), web_contents_(std::move(contents)) {
+  Init();
+}
+
+void Tab::Init() {
+  web_contents_->SetDelegate(this);
+  Observe(web_contents_.get());
   GetEngine()->tabs.push_back(this);
   // Renderers keep producing frames although no window shows them
   // ("being captured" disables hidden-rendering optimisations).
@@ -108,8 +129,7 @@ Tab::Tab(ne_tab* handle,
       /*is_activity=*/false);
   ApplySize();
   web_contents_->WasShown();
-  std::string url = ToString(config.url);
-  Load(url.empty() ? "about:blank" : url);
+  EnsureViewBridge();
 }
 
 Tab::~Tab() {
@@ -123,6 +143,8 @@ Tab::~Tab() {
   }
   held_frames_.clear();
   capture_handle_.RunAndReset();
+  // Views give their NSViews back before they go.
+  bridges_.clear();
   Observe(nullptr);
   auto& tabs = GetEngine()->tabs;
   tabs.erase(std::remove(tabs.begin(), tabs.end(), this), tabs.end());
@@ -145,6 +167,102 @@ Tab* Tab::FromWebContents(content::WebContents* contents) {
 
 content::RenderWidgetHostView* Tab::view() {
   return web_contents_->GetRenderWidgetHostView();
+}
+
+void Tab::EnsureViewBridge() {
+  content::RenderWidgetHostView* rwhv = view();
+  if (!rwhv) {
+    return;
+  }
+  content::RenderWidgetHost* host = rwhv->GetRenderWidgetHost();
+  if (bridges_.contains(host)) {
+    return;
+  }
+  // A main frame's view on macOS is always RenderWidgetHostViewMac.
+  auto* mac_view = static_cast<content::RenderWidgetHostViewMac*>(rwhv);
+  auto bridge = std::make_unique<ViewBridge>(this, host, mac_view);
+  if (bridge->alive()) {
+    bridges_.emplace(host, std::move(bridge));
+  }
+}
+
+ViewBridge* Tab::current_bridge() {
+  content::RenderWidgetHostView* rwhv = view();
+  if (!rwhv) {
+    return nullptr;
+  }
+  auto it = bridges_.find(rwhv->GetRenderWidgetHost());
+  return it == bridges_.end() || !it->second->alive() ? nullptr
+                                                       : it->second.get();
+}
+
+void Tab::ViewBridgeGone(ViewBridge* bridge) {
+  for (auto it = bridges_.begin(); it != bridges_.end(); ++it) {
+    if (it->second.get() == bridge) {
+      // Not while the widget is notifying its observers.
+      base::SequencedTaskRunner::GetCurrentDefault()->DeleteSoon(
+          FROM_HERE, std::move(it->second));
+      bridges_.erase(it);
+      return;
+    }
+  }
+}
+
+void Tab::NotifyCursor(int kind) {
+  if (has_presenter_ && presenter_.on_cursor) {
+    presenter_.on_cursor(presenter_.user_data, kind);
+  }
+}
+
+void Tab::NotifyTextInputState(int32_t type, uint32_t flags) {
+  if (has_presenter_ && presenter_.on_text_input_state) {
+    presenter_.on_text_input_state(presenter_.user_data, type, flags);
+  }
+}
+
+void Tab::NotifyImeCancel() {
+  if (has_presenter_ && presenter_.on_ime_cancel) {
+    presenter_.on_ime_cancel(presenter_.user_data);
+  }
+}
+
+void Tab::NotifyTooltip(const std::string& text) {
+  if (has_presenter_ && presenter_.on_tooltip) {
+    presenter_.on_tooltip(presenter_.user_data, {text.data(), text.size()});
+  }
+}
+
+void Tab::ImeSetComposition(const std::u16string& text,
+                            int selection_start,
+                            int selection_end,
+                            const gfx::Range& replacement) {
+  if (ViewBridge* bridge = current_bridge()) {
+    bridge->ImeSetComposition(text, selection_start, selection_end,
+                              replacement);
+  }
+}
+
+void Tab::ImeCommit(const std::u16string& text, const gfx::Range& replacement) {
+  if (ViewBridge* bridge = current_bridge()) {
+    bridge->ImeCommit(text, replacement);
+  }
+}
+
+void Tab::ImeFinish() {
+  if (ViewBridge* bridge = current_bridge()) {
+    bridge->ImeFinish();
+  }
+}
+
+void Tab::ImeCancel() {
+  if (ViewBridge* bridge = current_bridge()) {
+    bridge->ImeCancel();
+  }
+}
+
+bool Tab::ImeCaretRect(ne_rect* out_rect) {
+  ViewBridge* bridge = current_bridge();
+  return bridge && bridge->CaretRect(out_rect);
 }
 
 void Tab::Load(const std::string& url) {
@@ -589,18 +707,47 @@ content::WebContents* Tab::AddNewContents(
     const blink::mojom::WindowFeatures& window_features,
     bool user_gesture,
     bool* was_blocked) {
-  // Phase 0: new windows become a request for the app (NE_UI_NEW_TAB) and are
-  // not opened.
+  // The new page is offered to the app as a tab of its own; the app adopts
+  // it or declines (and may load the URL itself, as the CEF pane did).
+  auto* new_handle = new ne_tab;
+  new_handle->impl = std::make_unique<Tab>(new_handle, std::move(new_contents));
+  content::WebContents* contents = new_handle->impl->web_contents();
   std::string url = target_url.spec();
   ne_ui_request request = {sizeof(ne_ui_request)};
   request.kind = NE_UI_NEW_TAB;
   request.tab = handle_;
   request.message = {url.data(), url.size()};
-  GetEngine()->SendUiRequest(request, this, base::DoNothing());
-  if (was_blocked) {
-    *was_blocked = true;
+  request.url = {url.data(), url.size()};
+  request.new_tab = new_handle;
+  switch (disposition) {
+    case WindowOpenDisposition::NEW_BACKGROUND_TAB:
+      request.disposition = NE_DISPOSITION_BACKGROUND_TAB;
+      break;
+    case WindowOpenDisposition::NEW_POPUP:
+      request.disposition = NE_DISPOSITION_POPUP;
+      break;
+    case WindowOpenDisposition::NEW_WINDOW:
+      request.disposition = NE_DISPOSITION_WINDOW;
+      break;
+    default:
+      request.disposition = NE_DISPOSITION_FOREGROUND_TAB;
+      break;
   }
-  return nullptr;
+  GetEngine()->SendUiRequest(
+      request, this,
+      base::BindOnce(
+          [](ne_tab* new_handle, const ne_ui_response* response) {
+            if (!(response && response->accept)) {
+              // Declined: the page goes, after this call returns.
+              base::SequencedTaskRunner::GetCurrentDefault()->DeleteSoon(
+                  FROM_HERE, new_handle);
+            }
+          },
+          new_handle));
+  if (was_blocked) {
+    *was_blocked = false;
+  }
+  return contents;
 }
 
 void Tab::FindReply(content::WebContents* web_contents,
@@ -708,11 +855,20 @@ content::JavaScriptDialogManager* Tab::GetJavaScriptDialogManager(
 }
 
 void Tab::RenderViewReady() {
+  EnsureViewBridge();
   EnsureCapture();
   ApplySize();
 }
 
+void Tab::RenderFrameHostChanged(content::RenderFrameHost* old_host,
+                                 content::RenderFrameHost* new_host) {
+  if (new_host && !new_host->GetParentOrOuterDocument()) {
+    EnsureViewBridge();
+  }
+}
+
 void Tab::PrimaryPageChanged(content::Page& page) {
+  EnsureViewBridge();
   EnsureCapture();
   ApplySize();
   NotifyNavigationState();

@@ -1,0 +1,24 @@
+Reason: see render_widget_host_view_mac.h: SetEmbedderNSView. Refuses once the
+view shut down or when an app shim hosts it. No upstream bug.
+
+diff --git a/content/browser/renderer_host/render_widget_host_view_mac.mm b/content/browser/renderer_host/render_widget_host_view_mac.mm
+index f99512647a..d01b4bb9c4 100644
+--- a/content/browser/renderer_host/render_widget_host_view_mac.mm
++++ b/content/browser/renderer_host/render_widget_host_view_mac.mm
+@@ -314,6 +314,16 @@ void SendVisibleTimeRequestToDelegatedFrameHost(
+   ShutdownAndDisconnect();
+ }
+ 
++remote_cocoa::mojom::RenderWidgetHostNSView*
++RenderWidgetHostViewMac::SetEmbedderNSView(
++    remote_cocoa::mojom::RenderWidgetHostNSView* view) {
++  if (disconnected_ || remote_ns_view_) {
++    return nullptr;
++  }
++  ns_view_ = view ? view : in_process_ns_view_bridge_.get();
++  return in_process_ns_view_bridge_.get();
++}
++
+ void RenderWidgetHostViewMac::MigrateNSViewBridge(
+     remote_cocoa::mojom::Application* remote_cocoa_application,
+     uint64_t parent_ns_view_id) {

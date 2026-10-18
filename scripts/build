@@ -117,6 +117,10 @@ rc=$?
 end=$(date +%s)
 echo "== $(date) exit $rc after $(( (end - start) / 60 )) min (stopped by watchdog: $stopped)" | tee -a $log
 tail -25 $log
+# Siso keeps failing commands' output out of the log; show their errors.
+if (( rc != 0 )) && [[ -f $out/siso_output ]]; then
+  sed $'s/\x1b\\[[0-9;]*m//g' $out/siso_output | grep -E 'error:' -A4 | head -80 | tee -a $log
+fi
 
 if (( $(stat -f %z $log) > 2000000 )); then
   zstd -q --rm -19 $log && echo "log compressed to $log.zst"

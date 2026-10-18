@@ -46,7 +46,17 @@ extern "C" {
 #define NE_EXPORT
 #endif
 
-/* Bumped on every incompatible change; appended fields don't bump it. */
+/* Bumped on every incompatible change; appended fields don't bump it.
+ * The response to each request kind (ne_ui_respond):
+ *  - JS alert/confirm/prompt/beforeunload: accept, text (prompt);
+ *  - permission: accept, remember;
+ *  - <select>: accept, command_id (the item's index);
+ *  - context menu: accept, command_id (ne_context_command or the app's own);
+ *  - file chooser: accept, paths;
+ *  - HTTP auth: accept, text (user name), secret (password);
+ *  - certificate error: accept (proceed);
+ *  - download: accept, paths[0] (where to save);
+ *  - new tab: accept (adopt request.new_tab). */
 #define NE_API_VERSION 1
 
 /* ------------------------------------------------------------------------ */
@@ -255,7 +265,62 @@ typedef struct ne_presenter {
                     double content_width, double content_height);
   /* Phase 1: the page's background colour changed (ARGB). */
   void (*on_background_color)(void* user_data, uint32_t background_color_argb);
+  /* Phase 1: the focused element's text input (ne_text_input_type; 0 none),
+   * for the app's input method handling. */
+  void (*on_text_input_state)(void* user_data, int32_t type, uint32_t flags);
+  /* Phase 1: the page cancelled the input method's composition. */
+  void (*on_ime_cancel)(void* user_data);
+  /* Phase 1: the tooltip for the element under the pointer (empty: none). */
+  void (*on_tooltip)(void* user_data, ne_string_view text);
 } ne_presenter;
+
+/* Phase 1: on_cursor's kinds: Chromium's ui::mojom::CursorType values. */
+typedef enum ne_cursor_kind {
+  NE_CURSOR_POINTER = 0,
+  NE_CURSOR_CROSS = 1,
+  NE_CURSOR_HAND = 2,
+  NE_CURSOR_IBEAM = 3,
+  NE_CURSOR_WAIT = 4,
+  NE_CURSOR_HELP = 5,
+  NE_CURSOR_EAST_RESIZE = 6,
+  NE_CURSOR_NORTH_RESIZE = 7,
+  NE_CURSOR_NORTH_EAST_RESIZE = 8,
+  NE_CURSOR_NORTH_WEST_RESIZE = 9,
+  NE_CURSOR_SOUTH_RESIZE = 10,
+  NE_CURSOR_SOUTH_EAST_RESIZE = 11,
+  NE_CURSOR_SOUTH_WEST_RESIZE = 12,
+  NE_CURSOR_WEST_RESIZE = 13,
+  NE_CURSOR_NORTH_SOUTH_RESIZE = 14,
+  NE_CURSOR_EAST_WEST_RESIZE = 15,
+  NE_CURSOR_NORTH_EAST_SOUTH_WEST_RESIZE = 16,
+  NE_CURSOR_NORTH_WEST_SOUTH_EAST_RESIZE = 17,
+  NE_CURSOR_COLUMN_RESIZE = 18,
+  NE_CURSOR_ROW_RESIZE = 19,
+  NE_CURSOR_MOVE = 29,
+  NE_CURSOR_VERTICAL_TEXT = 30,
+  NE_CURSOR_CELL = 31,
+  NE_CURSOR_CONTEXT_MENU = 32,
+  NE_CURSOR_ALIAS = 33,
+  NE_CURSOR_PROGRESS = 34,
+  NE_CURSOR_NO_DROP = 35,
+  NE_CURSOR_COPY = 36,
+  NE_CURSOR_NONE = 37,
+  NE_CURSOR_NOT_ALLOWED = 38,
+  NE_CURSOR_ZOOM_IN = 39,
+  NE_CURSOR_ZOOM_OUT = 40,
+  NE_CURSOR_GRAB = 41,
+  NE_CURSOR_GRABBING = 42,
+  NE_CURSOR_CUSTOM = 45,              /* an image; shown as the pointer */
+} ne_cursor_kind;
+
+/* Phase 1: on_text_input_state's types (Chromium's ui::TextInputType). */
+typedef enum ne_text_input_type {
+  NE_TEXT_INPUT_NONE = 0,
+  NE_TEXT_INPUT_TEXT = 1,
+  NE_TEXT_INPUT_PASSWORD = 2,          /* no input method */
+  /* 3 and up: search, email, number, telephone, url, dates, text areas,
+   * content-editable elements: all take text. */
+} ne_text_input_type;
 
 /* Attach or detach (presenter == NULL) a tab's frames to a pane. Moving a tab
  * between panes is detach then attach; the page doesn't reload. */
@@ -299,6 +364,23 @@ typedef struct ne_input_event {
 NE_EXPORT void ne_tab_send_input(ne_tab* tab, const ne_input_event* event);
 NE_EXPORT void ne_tab_set_focus(ne_tab* tab, bool focused);
 
+/* Phase 1: input methods (marked text) for the focused text field. Offsets
+ * count UTF-16 code units. A replacement range of -1, -1 means the current
+ * composition or selection. */
+NE_EXPORT void ne_tab_ime_set_composition(ne_tab* tab, ne_string_view text,
+                                          int32_t selection_start,
+                                          int32_t selection_end,
+                                          int32_t replace_start,
+                                          int32_t replace_end);
+NE_EXPORT void ne_tab_ime_commit(ne_tab* tab, ne_string_view text,
+                                 int32_t replace_start, int32_t replace_end);
+/* Keeps the composition as typed. */
+NE_EXPORT void ne_tab_ime_finish(ne_tab* tab);
+NE_EXPORT void ne_tab_ime_cancel(ne_tab* tab);
+/* The caret's (or composition's) rectangle in the view, in DIPs, for the
+ * input method's candidate window. False when there is none. */
+NE_EXPORT bool ne_tab_ime_caret_rect(ne_tab* tab, ne_rect* out_rect);
+
 /* Edit commands from the app's menu (⌘C, ⌘V, ⌘A, undo...). */
 typedef enum ne_edit_command {
   NE_EDIT_UNDO = 1, NE_EDIT_REDO, NE_EDIT_CUT, NE_EDIT_COPY, NE_EDIT_PASTE,
@@ -325,12 +407,24 @@ typedef enum ne_ui_request_kind {
   NE_UI_NEW_TAB = 13,                 /* window.open / target=_blank */
 } ne_ui_request_kind;
 
+typedef enum ne_menu_item_kind {
+  NE_MENU_ITEM_COMMAND = 0,
+  NE_MENU_ITEM_CHECKABLE = 1,
+  NE_MENU_ITEM_GROUP = 2,             /* a <select>'s <optgroup> label */
+  NE_MENU_ITEM_SEPARATOR = 3,
+  NE_MENU_ITEM_SUBMENU = 4,
+} ne_menu_item_kind;
+
 typedef struct ne_menu_item {
-  int32_t command_id;                 /* -1 for a separator */
+  int32_t command_id;                 /* -1 for a separator; a <select>'s item index */
   ne_string_view label;
   bool enabled;
   bool checked;
   int32_t submenu_index;              /* index into the request's items, or -1 */
+  /* Phase 1 (ne_menu_item has no size field: no release used the shorter
+   * layout). */
+  int32_t kind;                       /* ne_menu_item_kind */
+  ne_string_view tooltip;
 } ne_menu_item;
 
 /* One request from a tab. Which fields are meaningful depends on `kind`;
@@ -349,7 +443,80 @@ typedef struct ne_ui_request {
   size_t item_count;
   int32_t selected_index;             /* <select> */
   bool multiple;                      /* file chooser: multiple files */
+  /* Phase 1: */
+  ne_string_view url;                 /* link (context menu), download, certificate or auth URL */
+  ne_string_view src_url;             /* context menu: the image or media's URL */
+  /* NE_UI_NEW_TAB: the new page. Accepting adopts it (the app closes it with
+   * ne_tab_close later); declining closes it. Null if the engine can't
+   * offer it (the app may still load `message`, the target URL). */
+  ne_tab* new_tab;
+  int32_t disposition;                /* NE_UI_NEW_TAB: ne_disposition */
+  int32_t file_mode;                  /* NE_UI_FILE_CHOOSER: ne_file_mode */
+  int32_t media_type;                 /* NE_UI_CONTEXT_MENU: ne_media_type */
+  bool is_editable;                   /* NE_UI_CONTEXT_MENU: in a text field */
+  bool can_proceed;                   /* NE_UI_CERTIFICATE_ERROR: false under HSTS */
+  int64_t total_bytes;                /* NE_UI_DOWNLOAD: -1 if unknown */
+  uint64_t download_id;               /* NE_UI_DOWNLOAD */
+  ne_string_view mime_type;           /* NE_UI_DOWNLOAD */
 } ne_ui_request;
+
+/* Phase 1: NE_UI_NEW_TAB's dispositions. */
+typedef enum ne_disposition {
+  NE_DISPOSITION_FOREGROUND_TAB = 1,
+  NE_DISPOSITION_BACKGROUND_TAB = 2,
+  NE_DISPOSITION_POPUP = 3,           /* window.open with features */
+  NE_DISPOSITION_WINDOW = 4,
+} ne_disposition;
+
+/* Phase 1: NE_UI_FILE_CHOOSER's modes. */
+typedef enum ne_file_mode {
+  NE_FILE_OPEN = 0,
+  NE_FILE_OPEN_MULTIPLE = 1,
+  NE_FILE_OPEN_FOLDER = 2,
+  NE_FILE_SAVE = 3,
+} ne_file_mode;
+
+/* Phase 1: NE_UI_CONTEXT_MENU's media types. */
+typedef enum ne_media_type {
+  NE_MEDIA_NONE = 0,
+  NE_MEDIA_IMAGE = 1,
+  NE_MEDIA_VIDEO = 2,
+  NE_MEDIA_AUDIO = 3,
+  NE_MEDIA_CANVAS = 4,
+  NE_MEDIA_OTHER = 5,
+} ne_media_type;
+
+/* Phase 1: the context menu's commands. The engine lists the ones that
+ * apply in the request's items and carries out those it can when the app
+ * answers with one; commands of the app's own (any other id, such as
+ * NE_CONTEXT_OPEN_LINK_IN_NEW_TAB) are the app's to do. */
+typedef enum ne_context_command {
+  NE_CONTEXT_BACK = 1,
+  NE_CONTEXT_FORWARD = 2,
+  NE_CONTEXT_RELOAD = 3,
+  NE_CONTEXT_OPEN_LINK_IN_NEW_TAB = 10,   /* the app's */
+  NE_CONTEXT_COPY_LINK = 11,
+  NE_CONTEXT_SAVE_LINK = 12,
+  NE_CONTEXT_COPY_IMAGE = 20,
+  NE_CONTEXT_COPY_IMAGE_URL = 21,
+  NE_CONTEXT_SAVE_IMAGE = 22,
+  NE_CONTEXT_OPEN_IMAGE_IN_NEW_TAB = 23,  /* the app's */
+  NE_CONTEXT_UNDO = 30,
+  NE_CONTEXT_REDO = 31,
+  NE_CONTEXT_CUT = 32,
+  NE_CONTEXT_COPY = 33,
+  NE_CONTEXT_PASTE = 34,
+  NE_CONTEXT_SELECT_ALL = 35,
+  NE_CONTEXT_PASTE_AND_MATCH_STYLE = 36,
+} ne_context_command;
+
+/* Phase 1: download progress (on_download_updated). */
+typedef enum ne_download_state {
+  NE_DOWNLOAD_IN_PROGRESS = 0,
+  NE_DOWNLOAD_COMPLETE = 1,
+  NE_DOWNLOAD_CANCELLED = 2,
+  NE_DOWNLOAD_INTERRUPTED = 3,
+} ne_download_state;
 
 typedef struct ne_ui_delegate {
   size_t size;
@@ -371,6 +538,13 @@ typedef struct ne_ui_delegate {
   /* Phase 1: loading progress per frame (ne_load_event_kind). */
   void (*on_load_event)(void* user_data, ne_tab* tab, ne_frame_id frame,
                         bool is_main, int32_t kind, ne_string_view url);
+  /* Phase 1: a download the app accepted moved on (ne_download_state). */
+  void (*on_download_updated)(void* user_data, uint64_t download_id,
+                              int32_t state, int64_t received_bytes,
+                              int64_t total_bytes, ne_string_view path);
+  /* Phase 1: the page's icon, as PNG bytes (valid during the call). */
+  void (*on_favicon)(void* user_data, ne_tab* tab, ne_string_view icon_url,
+                     const uint8_t* png, size_t png_size);
 } ne_ui_delegate;
 
 /* Phase 1: on_load_event's kinds. */
@@ -398,6 +572,12 @@ typedef struct ne_ui_response {
 
 NE_EXPORT void ne_ui_respond(ne_app* app, ne_request_id id,
                              const ne_ui_response* response);
+
+/* Phase 1: stops a download the app accepted. */
+NE_EXPORT void ne_download_cancel(ne_app* app, uint64_t download_id);
+
+/* Phase 1: the zoom factor a tab shows (1.0 = 100%). */
+NE_EXPORT double ne_tab_get_zoom(ne_tab* tab);
 
 /* ------------------------------------------------------------------------ */
 /* Features and per-site effects (ArcFeature, ArcBrowserContextEffects)       */

@@ -1,0 +1,19 @@
+Reason: notolibra/engine includes content/browser's RenderWidgetHostViewMac
+(its view bridge), through the for_content_tests group content/test uses
+for the same reason: in component builds it adds no second copy of
+//content/browser. No upstream bug.
+
+diff --git a/content/browser/BUILD.gn b/content/browser/BUILD.gn
+index 3162721b67..c50d9c3707 100644
+--- a/content/browser/BUILD.gn
++++ b/content/browser/BUILD.gn
+@@ -3652,6 +3652,9 @@ group("for_content_tests") {
+     "//content/public/test/android/*",
+     "//content/test/*",
+     "//content/web_test:web_test_browser",
++
++    # The Notolibra engine's off-screen view uses RenderWidgetHostViewMac.
++    "//notolibra/*",
+   ]
+   if (!is_component_build) {
+     public_deps = [ ":browser" ]

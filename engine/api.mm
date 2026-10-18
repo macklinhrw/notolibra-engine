@@ -8,6 +8,7 @@
 #import <AppKit/AppKit.h>
 #include <objc/runtime.h>
 
+#include <cstddef>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -24,6 +25,7 @@
 #include "base/message_loop/message_pump_apple.h"
 #include "base/run_loop.h"
 #include "base/strings/sys_string_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "content/public/app/content_main.h"
 #include "content/public/app/content_main_runner.h"
@@ -134,9 +136,9 @@ Engine* GetEngine() {
   return g_engine;
 }
 
-void Engine::SendUiRequest(ne_ui_request& request,
-                           Tab* tab,
-                           UiResponseCallback callback) {
+ne_request_id Engine::SendUiRequest(ne_ui_request& request,
+                                    Tab* tab,
+                                    UiResponseCallback callback) {
   const ne_request_id id = next_request_id++;
   request.id = id;
   pending_requests.emplace(id, Pending{tab, std::move(callback)});
@@ -145,6 +147,17 @@ void Engine::SendUiRequest(ne_ui_request& request,
   } else {
     Respond(id, nullptr);
   }
+  return id;
+}
+
+void Engine::CancelRequest(ne_request_id id) {
+  if (!pending_requests.contains(id)) {
+    return;
+  }
+  if (has_ui_delegate && ui_delegate.on_cancel) {
+    ui_delegate.on_cancel(ui_delegate.user_data, id);
+  }
+  Respond(id, nullptr);
 }
 
 void Engine::Respond(ne_request_id id, const ne_ui_response* response) {
@@ -218,12 +231,15 @@ NE_EXPORT ne_status ne_app_init(const ne_app_config* config,
   engine.keychain_service = ToString(config->keychain_service);
 
   // argv[0] is the host's executable. Phase 0 runs without the sandbox, as
-  // today's CEF pane does, and with a mock keychain (plan.md §4.6 gives the
-  // engine its own keychain item later).
+  // today's CEF pane does. Cookies are encrypted with the key in the app's
+  // own keychain item (keychain_service); without one (verification runs)
+  // the keychain is a mock and nothing reaches the user's keychain.
   NSString* executable = NSProcessInfo.processInfo.arguments.firstObject;
   engine.argv_storage.push_back(base::SysNSStringToUTF8(executable));
   engine.argv_storage.push_back("--no-sandbox");
-  engine.argv_storage.push_back("--use-mock-keychain");
+  if (engine.keychain_service.empty()) {
+    engine.argv_storage.push_back("--use-mock-keychain");
+  }
   // SAFETY: the caller passes argc entries in argv.
   auto extra_args = UNSAFE_BUFFERS(
       base::span(config->argv, static_cast<size_t>(std::max(config->argc, 0))));
@@ -488,15 +504,63 @@ NE_EXPORT void ne_tab_release_frame(ne_tab* tab, uint64_t frame_id) {
 }
 
 NE_EXPORT void ne_tab_send_input(ne_tab* tab, const ne_input_event* event) {
-  if (tab && event && event->size >= sizeof(ne_input_event)) {
-    tab->impl->SendInput(*event);
+  // An older caller's shorter struct: the fields it lacks stay zero.
+  constexpr size_t kPhase0Size = offsetof(ne_input_event, momentum_phase);
+  if (!tab || !event || event->size < kPhase0Size) {
+    return;
   }
+  ne_input_event copy = {};
+  // SAFETY: the caller's struct starts with its own size; at most that much
+  // (and no more than ours) is copied.
+  UNSAFE_BUFFERS(std::memcpy(&copy, event,
+                             std::min(event->size, sizeof(ne_input_event))));
+  copy.size = sizeof(ne_input_event);
+  tab->impl->SendInput(copy);
 }
 
 NE_EXPORT void ne_tab_set_focus(ne_tab* tab, bool focused) {
   if (tab) {
     tab->impl->SetFocus(focused);
   }
+}
+
+NE_EXPORT void ne_tab_ime_set_composition(ne_tab* tab,
+                                          ne_string_view text,
+                                          int32_t selection_start,
+                                          int32_t selection_end,
+                                          int32_t replace_start,
+                                          int32_t replace_end) {
+  if (tab) {
+    tab->impl->ImeSetComposition(base::UTF8ToUTF16(ToString(text)),
+                                 selection_start, selection_end,
+                                 notolibra::ImeRange(replace_start, replace_end));
+  }
+}
+
+NE_EXPORT void ne_tab_ime_commit(ne_tab* tab,
+                                 ne_string_view text,
+                                 int32_t replace_start,
+                                 int32_t replace_end) {
+  if (tab) {
+    tab->impl->ImeCommit(base::UTF8ToUTF16(ToString(text)),
+                         notolibra::ImeRange(replace_start, replace_end));
+  }
+}
+
+NE_EXPORT void ne_tab_ime_finish(ne_tab* tab) {
+  if (tab) {
+    tab->impl->ImeFinish();
+  }
+}
+
+NE_EXPORT void ne_tab_ime_cancel(ne_tab* tab) {
+  if (tab) {
+    tab->impl->ImeCancel();
+  }
+}
+
+NE_EXPORT bool ne_tab_ime_caret_rect(ne_tab* tab, ne_rect* out_rect) {
+  return tab && out_rect && tab->impl->ImeCaretRect(out_rect);
 }
 
 NE_EXPORT void ne_tab_edit(ne_tab* tab, ne_edit_command command) {
@@ -527,6 +591,20 @@ NE_EXPORT void ne_ui_respond(ne_app* app,
   if (app && app->engine) {
     app->engine->Respond(id, response);
   }
+}
+
+NE_EXPORT void ne_download_cancel(ne_app* app, uint64_t download_id) {
+  if (g_profile && g_profile->context) {
+    g_profile->context->CancelDownload(static_cast<uint32_t>(download_id));
+  }
+}
+
+NE_EXPORT double ne_tab_get_zoom(ne_tab* tab) {
+  if (!tab) {
+    return 1.0;
+  }
+  return blink::ZoomLevelToZoomFactor(
+      content::HostZoomMap::GetZoomLevel(tab->impl->web_contents()));
 }
 
 NE_EXPORT void ne_profile_set_feature(ne_profile* profile,

@@ -1,0 +1,26 @@
+Reason: the engine names its own Safe Storage keychain item ("Notolibra Engine
+Safe Storage", plan.md §4.6, cef.md C6) instead of sharing Chromium's: a
+public config defines ALLOW_RUNTIME_CONFIGURABLE_KEY_STORAGE, which makes
+KeychainPassword's names settable, for every user of the header alike.
+No upstream bug.
+
+diff --git a/components/os_crypt/common/BUILD.gn b/components/os_crypt/common/BUILD.gn
+index 10db068710..2a52fd0cf2 100644
+--- a/components/os_crypt/common/BUILD.gn
++++ b/components/os_crypt/common/BUILD.gn
+@@ -17,7 +17,15 @@ group("crypto_lib") {
+ }
+ 
+ if (is_apple) {
++  # Notolibra: the engine names its own Safe Storage keychain item at run
++  # time (KeychainPassword::GetServiceName() and GetAccountName() become
++  # settable). Every user of the header must see the same define.
++  config("runtime_configurable_key_storage") {
++    defines = [ "ALLOW_RUNTIME_CONFIGURABLE_KEY_STORAGE" ]
++  }
++
+   source_set("keychain_password_mac") {
++    public_configs = [ ":runtime_configurable_key_storage" ]
+     sources = [
+       "keychain_password_mac.h",
+       "keychain_password_mac.mm",

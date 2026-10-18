@@ -11,10 +11,17 @@
 #include "base/memory/raw_ptr.h"
 #include "content/public/browser/browser_main_parts.h"
 #include "content/public/browser/content_browser_client.h"
+#include "content/public/browser/login_delegate.h"
 
 namespace display {
 class ScopedNativeScreen;
 }
+
+namespace os_crypt_async {
+class OSCryptAsync;
+}
+
+class CookieEncryptionProviderImpl;
 
 namespace notolibra {
 
@@ -31,9 +38,15 @@ class BrowserMainParts : public content::BrowserMainParts {
   void PostMainMessageLoopRun() override;
 
   BrowserContext* browser_context() { return browser_context_.get(); }
+  CookieEncryptionProviderImpl* cookie_encryption() {
+    return cookie_encryption_.get();
+  }
 
  private:
   std::unique_ptr<display::ScopedNativeScreen> screen_;
+  // Cookies are encrypted with a key in our own keychain item (plan.md §4.6).
+  std::unique_ptr<os_crypt_async::OSCryptAsync> os_crypt_;
+  std::unique_ptr<CookieEncryptionProviderImpl> cookie_encryption_;
   std::unique_ptr<BrowserContext> browser_context_;
 };
 
@@ -56,6 +69,29 @@ class BrowserClient : public content::ContentBrowserClient {
       cert_verifier::mojom::CertVerifierCreationParams*
           cert_verifier_creation_params) override;
   std::vector<base::FilePath> GetNetworkContextsParentDirectory() override;
+  base::FilePath GetChildProcessPath(int child_flags) override;
+  std::unique_ptr<content::LoginDelegate> CreateLoginDelegate(
+      const net::AuthChallengeInfo& auth_info,
+      content::WebContents* web_contents,
+      content::BrowserContext* browser_context,
+      const content::GlobalRequestID& request_id,
+      bool is_request_for_primary_main_frame_navigation,
+      bool is_request_for_navigation,
+      const GURL& url,
+      scoped_refptr<net::HttpResponseHeaders> response_headers,
+      bool first_auth_attempt,
+      content::GuestPageHolder* guest_page_holder,
+      content::LoginDelegate::LoginAuthRequiredCallback auth_required_callback)
+      override;
+  void AllowCertificateError(
+      content::WebContents* web_contents,
+      int cert_error,
+      const net::SSLInfo& ssl_info,
+      const GURL& request_url,
+      bool is_primary_main_frame_request,
+      bool strict_enforcement,
+      base::OnceCallback<void(content::CertificateRequestResultType)> callback)
+      override;
 
   // The one profile of Phase 0, created in PreMainMessageLoopRun().
   BrowserContext* browser_context();

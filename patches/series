@@ -19,3 +19,7 @@ macos-attach-mode/base-task-sequence_manager-sequence_manager_impl.h.patch
 macos-attach-mode/base-task-sequence_manager-sequence_manager_impl.cc.patch
 embedder-run-loop/content-public-app-content_main.h.patch
 embedder-run-loop/content-app-content_main.cc.patch
+embedder-ns-view/content-browser-renderer_host-render_widget_host_view_mac.h.patch
+embedder-ns-view/content-browser-renderer_host-render_widget_host_view_mac.mm.patch
+embedder-ns-view/content-browser-BUILD.gn.patch
+embedder-keychain/components-os_crypt-common-BUILD.gn.patch

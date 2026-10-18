@@ -5,12 +5,16 @@
 
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 
 #include "base/files/file_path.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/permission_controller_delegate.h"
+#include "content/public/browser/ssl_host_state_delegate.h"
+#include "net/base/net_errors.h"
 
 namespace notolibra {
 
@@ -60,6 +64,55 @@ class PermissionManager : public content::PermissionControllerDelegate {
   base::WeakPtrFactory<PermissionManager> weak_factory_{this};
 };
 
+// Certificate errors the user chose to proceed past, and hosts allowed over
+// HTTP, for this session (as Chrome remembers them until the browser quits).
+class SslHostState : public content::SSLHostStateDelegate {
+ public:
+  SslHostState();
+  ~SslHostState() override;
+
+  // content::SSLHostStateDelegate:
+  void AllowCert(const std::string& host,
+                 const net::X509Certificate& cert,
+                 net::Error error,
+                 content::StoragePartition* storage_partition) override;
+  void Clear(
+      base::RepeatingCallback<bool(const std::string&)> host_filter) override;
+  CertJudgment QueryPolicy(const std::string& host,
+                           const net::X509Certificate& cert,
+                           net::Error error,
+                           content::StoragePartition* storage_partition) override;
+  void HostRanInsecureContent(const std::string& host,
+                              InsecureContentType content_type) override;
+  bool DidHostRunInsecureContent(const std::string& host,
+                                 InsecureContentType content_type) override;
+  void AllowHttpForHost(const std::string& host,
+                        content::StoragePartition* storage_partition) override;
+  bool IsHttpAllowedForHost(const std::string& host,
+                            content::StoragePartition* storage_partition) override;
+  void RevokeUserAllowExceptions(const std::string& host) override;
+  void SetHttpsEnforcementForHost(
+      const std::string& host,
+      bool enforce,
+      content::StoragePartition* storage_partition) override;
+  bool IsHttpsEnforcedForUrl(
+      const GURL& url,
+      content::StoragePartition* storage_partition) override;
+  bool HasAllowException(const std::string& host,
+                         content::StoragePartition* storage_partition) override;
+  bool HasAllowExceptionForAnyHost(
+      content::StoragePartition* storage_partition) override;
+
+ private:
+  // (host, certificate fingerprint, error) the user allowed.
+  std::set<std::tuple<std::string, std::string, int>> allowed_;
+  std::set<std::string> http_allowed_;
+  std::set<std::string> https_enforced_;
+  std::set<std::pair<std::string, int>> insecure_content_;
+};
+
+class DownloadDelegate;
+
 class BrowserContext : public content::BrowserContext {
  public:
   explicit BrowserContext(const base::FilePath& path);
@@ -89,9 +142,14 @@ class BrowserContext : public content::BrowserContext {
   content::BrowsingDataRemoverDelegate* GetBrowsingDataRemoverDelegate()
       override;
 
+  // Stops the profile's downloads (ne_download_cancel).
+  void CancelDownload(uint32_t id);
+
  private:
   base::FilePath path_;
   std::unique_ptr<PermissionManager> permission_manager_;
+  std::unique_ptr<SslHostState> ssl_host_state_;
+  std::unique_ptr<DownloadDelegate> download_delegate_;
 };
 
 }  // namespace notolibra
