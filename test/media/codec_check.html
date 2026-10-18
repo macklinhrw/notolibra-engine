@@ -12,7 +12,7 @@ if (window.testRunner) {
   testRunner.waitUntilDone();
 }
 const out = document.getElementById('out');
-const log = (line) => { out.textContent += line + '\n'; };
+const log = (line) => { out.textContent += line + '\n'; console.log('NLCHECK ' + line); };
 
 const TYPES = [
   ['H.264 High', 'video/mp4; codecs="avc1.64001f"'],

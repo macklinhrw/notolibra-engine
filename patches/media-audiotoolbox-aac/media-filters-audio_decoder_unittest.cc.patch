@@ -1,11 +1,15 @@
-Reason: tests for the AudioToolbox AAC change. FFmpeg AAC cases skip when
-FFmpeg has no AAC decoder (ours doesn't); AudioToolbox gets an AAC-LC case
-(sfx.adts), with the ADTS AudioSpecificConfig extracted as for MediaCodec and
-Media Foundation. Expected timestamps are FFmpeg's until a run confirms
-AudioToolbox's. No upstream bug.
+Reason: tests for the AudioToolbox AAC change.
+- FFmpeg AAC cases skip when FFmpeg has no AAC decoder (ours doesn't).
+- AudioToolbox gets an AAC case from MP4 (bear-mpeg2-aac-only_frag.mp4);
+  FFmpeg can't time ADTS streams without its decoder.
+- The ADTS AudioSpecificConfig extraction covers AudioToolbox too.
+- Without FFmpeg's AAC decoder, FFmpeg reports xHE-AAC mono's container
+  channel count instead of "unsupported"; the layout check allows that.
+Run October 18 (*AudioToolbox*:FFmpeg/AudioDecoderTest*): 225 tests, all
+passed (30 FFmpeg AAC cases skipped). No upstream bug.
 
 diff --git a/media/filters/audio_decoder_unittest.cc b/media/filters/audio_decoder_unittest.cc
-index 37897d6d54..cdbde2e59d 100644
+index 37897d6d54..6fd7e7c6bb 100644
 --- a/media/filters/audio_decoder_unittest.cc
 +++ b/media/filters/audio_decoder_unittest.cc
 @@ -263,6 +263,11 @@ class AudioDecoderTest
@@ -36,15 +40,32 @@ index 37897d6d54..cdbde2e59d 100644
          codec() == AudioCodec::kAAC && config.extra_data().empty()) {
        const auto header = ADTSStreamParser::ParseHeader(AVPacketData(*packet));
        ASSERT_TRUE(header.has_value());
-@@ -1549,6 +1555,25 @@ INSTANTIATE_TEST_SUITE_P(AudioToolbox,
+@@ -368,7 +374,14 @@ class AudioDecoderTest
+ 
+     EXPECT_EQ(params_.codec, config.codec());
+     EXPECT_EQ(params_.samples_per_second, config.samples_per_second());
+-    EXPECT_EQ(params_.channel_layout, config.channel_layout());
++    // Without FFmpeg's AAC decoder, FFmpeg reports the container's channel
++    // count rather than the decoder's layout, so an expected "unsupported"
++    // layout (xHE-AAC mono at 29.4 kHz) arrives as a counted one.
++    if (!(codec() == AudioCodec::kAAC &&
++          params_.channel_layout == CHANNEL_LAYOUT_UNSUPPORTED &&
++          avcodec_find_decoder(AV_CODEC_ID_AAC) == nullptr)) {
++      EXPECT_EQ(params_.channel_layout, config.channel_layout());
++    }
+ 
+     InitializeDecoder(config);
+   }
+@@ -1549,6 +1562,26 @@ INSTANTIATE_TEST_SUITE_P(AudioToolbox,
                           AudioDecoderTest,
                           Combine(Values(AudioDecoderType::kAudioToolbox),
                                   ValuesIn(kXheAacTestParams)));
 +
-+// AAC-LC through AudioToolbox. No hashes: the decoder belongs to the OS.
++// AAC through AudioToolbox, from MP4 (FFmpeg can't time ADTS streams without
++// its AAC decoder). No hashes: the decoder belongs to the OS.
 +constexpr TestParams kAudioToolboxAacTestParams[] = {
 +    {AudioCodec::kAAC,
-+     "sfx.adts",
++     "bear-mpeg2-aac-only_frag.mp4",
 +     {{
 +         {0, 23219, nullptr},
 +         {23219, 23219, nullptr},
@@ -52,7 +73,7 @@ index 37897d6d54..cdbde2e59d 100644
 +     }},
 +     0,
 +     44100,
-+     CHANNEL_LAYOUT_MONO},
++     CHANNEL_LAYOUT_STEREO},
 +};
 +
 +INSTANTIATE_TEST_SUITE_P(AudioToolboxAac,

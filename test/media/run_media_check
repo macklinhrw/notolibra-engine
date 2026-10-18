@@ -1,7 +1,8 @@
 #!/bin/zsh
 # Run the Phase 0 media check (codec_check.html) hidden, with content_shell.
 #
-#   test/media/run_media_check [out_dir] [media_dir]
+#   test/media/run_media_check [--chrome] [out_dir] [media_dir]
+#     --chrome   run Chromium.app with --headless=new instead of content_shell
 #     out_dir    default: out/Dev (relative to src)
 #     media_dir  default: ~/chromium/scratch/media (make it with make_media)
 #
@@ -13,14 +14,21 @@
 #    activates) and re-signed ad hoc;
 #  - every media element is muted, and --mute-audio is passed.
 set -uo pipefail
+browser=content_shell
+[[ ${1:-} == --chrome ]] && { browser=chrome; shift; }
 ENGINE=${0:A:h:h:h}
 SRC=${ENGINE:h}
 out=${1:-out/Dev}
 media=${2:-$HOME/chromium/scratch/media}
 cd "$SRC" || exit 1
 
-app="$out/Content Shell.app"
-exe="$app/Contents/MacOS/Content Shell"
+if [[ $browser == chrome ]]; then
+  app="$out/Chromium.app"
+  exe="$app/Contents/MacOS/Chromium"
+else
+  app="$out/Content Shell.app"
+  exe="$app/Contents/MacOS/Content Shell"
+fi
 [[ -x $exe ]] || { echo "error: $exe not built"; exit 1; }
 [[ -d $media ]] || { echo "error: no media at $media"; exit 1; }
 
@@ -45,13 +53,30 @@ mkdir -p "$logdir"
 result="$logdir/media-check-$ts.txt"
 stderr_log="$logdir/media-check-$ts.stderr.log"
 
-"$exe" --run-web-tests --mute-audio --autoplay-policy=no-user-gesture-required \
-  --enable-logging=stderr \
-  --vmodule='decoder_selector=2,decoder_stream=2,audio_toolbox_audio_decoder=2,video_toolbox_video_decoder=2,mojo_audio_decoder=2,ffmpeg_audio_decoder=2' \
-  "http://127.0.0.1:$port/codec_check.html" > "$result" 2> "$stderr_log" &
+vmodule='decoder_selector=2,decoder_stream=2,audio_toolbox_audio_decoder=2,video_toolbox_video_decoder=2,mojo_audio_decoder=2,ffmpeg_audio_decoder=2'
+url="http://127.0.0.1:$port/codec_check.html"
+if [[ $browser == chrome ]]; then
+  # --headless=new creates no windows; the mock keychain and basic password
+  # store keep macOS from showing a keychain prompt.
+  profile=$(mktemp -d /tmp/nl-chrome-profile.XXXXXX)
+  "$exe" --headless=new --user-data-dir="$profile" --no-first-run \
+    --use-mock-keychain --password-store=basic --mute-audio \
+    --autoplay-policy=no-user-gesture-required --enable-logging=stderr \
+    --vmodule="$vmodule" "$url" > "$result" 2> "$stderr_log" &
+else
+  "$exe" --run-web-tests --mute-audio --autoplay-policy=no-user-gesture-required \
+    --enable-logging=stderr --vmodule="$vmodule" "$url" > "$result" 2> "$stderr_log" &
+fi
 shell=$!
 ( sleep 240; kill $shell 2>/dev/null ) &
 watchdog=$!
+if [[ $browser == chrome ]]; then
+  # Chrome keeps running after the page finishes; stop it once the page is done.
+  until grep -q 'NLCHECK == done' "$stderr_log" 2>/dev/null || ! kill -0 $shell 2>/dev/null; do sleep 1; done
+  kill $shell 2>/dev/null
+  sed -n 's/.*NLCHECK \(.*\)", source.*/\1/p' "$stderr_log" > "$result"
+  rm -rf "$profile"
+fi
 wait $shell
 rc=$?
 kill $watchdog $server 2>/dev/null
