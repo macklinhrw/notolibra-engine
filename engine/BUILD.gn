@@ -237,13 +237,13 @@ mac_app_bundle("helper_app") {
   sources = [ "helper_main.cc" ]
   include_dirs = [ "//notolibra/api" ]
   info_plist = "helper-Info.plist"
+  # The framework is loaded with dlopen (helper_main.cc), not linked.
   deps = [
-    ":framework+link_nested",
     "//base/allocator:early_zone_registration_apple",
     "//sandbox/mac:seatbelt",
   ]
   # NotolibraEngine.framework/Versions/A/Helpers/<helper>.app/Contents/MacOS:
   # seven levels up is the folder holding the framework and the shared
-  # libraries.
+  # libraries (a component build's base and sandbox libraries).
   ldflags = [ "-Wl,-rpath,@executable_path/../../../../../../.." ]
 }

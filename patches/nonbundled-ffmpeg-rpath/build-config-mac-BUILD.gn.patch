@@ -1,0 +1,26 @@
+FFmpeg is its own shared library in every build (is_component_ffmpeg, so it can be swapped under the LGPL). In non-component builds Chromium adds no rpath, so build-time tools that link it (v8_context_snapshot_generator) fail to start: 'Library not loaded: @rpath/libffmpeg.dylib'. Adds the component build's rpaths whenever FFmpeg is shared. No upstream bug.
+
+diff --git a/build/config/mac/BUILD.gn b/build/config/mac/BUILD.gn
+index 7114fd817a..68166eaaef 100644
+--- a/build/config/mac/BUILD.gn
++++ b/build/config/mac/BUILD.gn
+@@ -9,6 +9,7 @@ import("//build/config/mac/mac_sdk.gni")
+ import("//build/config/sysroot.gni")
+ import("//build/toolchain/rbe.gni")
+ import("//build/toolchain/siso.gni")
++import("//third_party/ffmpeg/ffmpeg_options.gni")
+ 
+ # This is included by reference in the //build/config/compiler config that
+ # is applied to all targets. It is here to separate out the logic.
+@@ -69,7 +70,10 @@ config("runtime_library") {
+ config("mac_dynamic_flags") {
+   ldflags = [ "-Wl,-ObjC" ]  # Always load Objective-C categories and classes.
+ 
+-  if (is_component_build) {
++  # Notolibra: FFmpeg can be a shared library in a non-component build
++  # (is_component_ffmpeg, for the LGPL), which binaries such as
++  # v8_context_snapshot_generator then load from beside them.
++  if (is_component_build || is_component_ffmpeg) {
+     ldflags += [
+       # Path for loading shared libraries for unbundled binaries.
+       "-Wl,-rpath,@loader_path/.",

@@ -24,3 +24,4 @@ embedder-ns-view/content-browser-renderer_host-render_widget_host_view_mac.mm.pa
 embedder-ns-view/content-browser-BUILD.gn.patch
 embedder-keychain/components-os_crypt-common-BUILD.gn.patch
 embedder-sandbox-path/content-browser-sandbox_parameters_mac.mm.patch
+nonbundled-ffmpeg-rpath/build-config-mac-BUILD.gn.patch
