@@ -286,14 +286,6 @@ class Tab : public content::WebContentsDelegate,
   // delegate's DidAddMessageToConsole, called right after, returns it.
   bool console_consumed_ = false;
 
-  // Wheel events without phases (a mouse wheel) get Began/Changed phases
-  // and an Ended one after a pause, as RenderWidgetHostViewMac's
-  // MouseWheelPhaseHandler adds them; Chromium's Mac scrolling needs them.
-  bool wheel_in_progress_ = false;
-  gfx::PointF last_wheel_position_;
-  base::OneShotTimer wheel_end_timer_;
-  void EndWheel();
-
   base::WeakPtrFactory<Tab> weak_factory_{this};
 };
 

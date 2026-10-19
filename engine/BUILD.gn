@@ -90,6 +90,7 @@ source_set("engine_sources") {
     "//ui/events",
     "//ui/gfx",
     "//ui/gfx/range",
+    "//ui/latency",
     "//url",
   ]
   frameworks = [

@@ -86,6 +86,24 @@ and the frame a pass later. `--notolibra-frame-source=capture` brings the
 capturer back for comparison. `ne_frame.capture_time_us` is when the engine
 had the frame (`base::TimeTicks` microseconds), so hosts can time the stages.
 
+## Input
+
+`ne_tab_send_input` hands events to the main frame's `RenderWidgetHostViewMac`
+as AppKit's events reach it in Chrome: pointer and wheel events through
+`RouteOrProcessMouseEvent` and `RouteOrProcessWheelEvent`, which hit-test
+them to the widget under the pointer (a cross-site frame renders in another
+process, with a widget of its own), and keys between `BeginKeyboardEvent` and
+`EndKeyboardEvent`, which send them to the focused widget. The view's
+`MouseWheelPhaseHandler` gives a wheel without phases (a mouse wheel) its
+phases and ends a scroll after a pause. Until October 18, 2026 the tab
+forwarded every event to the main frame's widget, so cross-site frames
+(embedded players, sign-in and payment frames, Twitch's extensions) got no
+input at all: the main frame's renderer only sees the frame's element. Where
+the main frame's content lies over a cross-site frame, the browser asks the
+main frame's renderer what is under the pointer, so on a busy page events
+there can arrive a little late, as in Chrome. The app's check:
+`NOTOLIBRA_ENGINE_UI_TEST=1` (native/README.md).
+
 ## Licences
 
 Closed source. Only permissive code goes in here: our own, Chromium's

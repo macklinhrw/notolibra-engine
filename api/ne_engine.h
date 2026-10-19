@@ -333,7 +333,9 @@ NE_EXPORT void ne_tab_set_view_size(ne_tab* tab, double width, double height,
                                     double scale_factor);
 NE_EXPORT void ne_tab_release_frame(ne_tab* tab, uint64_t frame_id);
 
-/* Input, forwarded by hand (plan.md §2.5). */
+/* Input, forwarded by hand (plan.md §2.5). Pointer and wheel events go to
+ * the frame under the pointer (cross-site frames included), keys to the
+ * focused frame, as AppKit's events do in Chrome. */
 typedef enum ne_input_kind {
   NE_INPUT_MOUSE_DOWN = 1,
   NE_INPUT_MOUSE_UP = 2,

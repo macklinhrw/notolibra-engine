@@ -44,6 +44,7 @@
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size_conversions.h"
+#include "ui/latency/latency_info.h"
 
 namespace notolibra {
 
@@ -486,7 +487,14 @@ void Tab::SendInput(const ne_input_event& event) {
   if (!rwhv) {
     return;
   }
-  content::RenderWidgetHost* host = rwhv->GetRenderWidgetHost();
+  // Input goes in through the main frame's view, as AppKit's events do in
+  // Chrome: the view routes pointer and wheel events by hit testing to the
+  // widget under the pointer (a cross-site frame renders in another
+  // process, with a widget of its own) and keys to the focused widget.
+  // Forwarding to the main frame's widget directly left cross-site frames
+  // without input: the main frame's renderer only sees the frame's element.
+  // A main frame's view on macOS is always RenderWidgetHostViewMac.
+  auto* mac_view = static_cast<content::RenderWidgetHostViewMac*>(rwhv);
   const base::TimeTicks now = base::TimeTicks::Now();
   const gfx::PointF position(event.x, event.y);
   switch (event.kind) {
@@ -515,7 +523,7 @@ void Tab::SendInput(const ne_input_event& event) {
         mouse.button = blink::WebMouseEvent::Button::kNoButton;
       }
       mouse.click_count = event.click_count;
-      host->ForwardMouseEvent(mouse);
+      mac_view->RouteOrProcessMouseEvent(mouse);
       break;
     }
     case NE_INPUT_WHEEL: {
@@ -530,22 +538,13 @@ void Tab::SendInput(const ne_input_event& event) {
       wheel.delta_units = event.precise
                               ? ui::ScrollGranularity::kScrollByPrecisePixel
                               : ui::ScrollGranularity::kScrollByPixel;
-      if (event.phase || event.momentum_phase) {
-        wheel.phase = static_cast<blink::WebMouseWheelEvent::Phase>(event.phase);
-        wheel.momentum_phase =
-            static_cast<blink::WebMouseWheelEvent::Phase>(event.momentum_phase);
-        wheel_in_progress_ = false;
-        wheel_end_timer_.Stop();
-      } else {
-        wheel.phase = wheel_in_progress_ ? blink::WebMouseWheelEvent::kPhaseChanged
-                                         : blink::WebMouseWheelEvent::kPhaseBegan;
-        wheel_in_progress_ = true;
-        last_wheel_position_ = position;
-        wheel_end_timer_.Start(FROM_HERE, base::Milliseconds(100),
-                               base::BindOnce(&Tab::EndWheel,
-                                              weak_factory_.GetWeakPtr()));
-      }
-      host->ForwardWheelEvent(wheel);
+      wheel.phase = static_cast<blink::WebMouseWheelEvent::Phase>(event.phase);
+      wheel.momentum_phase =
+          static_cast<blink::WebMouseWheelEvent::Phase>(event.momentum_phase);
+      // The view's MouseWheelPhaseHandler adds phases to a wheel without
+      // them (a mouse wheel) and ends a scroll after a pause, latched to
+      // the widget it began over.
+      mac_view->RouteOrProcessWheelEvent(wheel);
       break;
     }
     case NE_INPUT_KEY_DOWN:
@@ -575,7 +574,11 @@ void Tab::SendInput(const ne_input_event& event) {
       if (event.kind == NE_INPUT_CHAR) {
         key.SetType(blink::WebInputEvent::Type::kChar);
       }
-      host->ForwardKeyboardEvent(key);
+      // To the focused widget, as the Mac view's -keyEvent: sends them.
+      ui::LatencyInfo latency;
+      latency.AddLatencyNumber(ui::INPUT_EVENT_LATENCY_UI_COMPONENT);
+      mac_view->BeginKeyboardEvent();
+      mac_view->ForwardKeyboardEvent(key, latency);
       // A key press that inserts text also sends a Char event, as the Mac
       // view's -insertText: does. Command-key shortcuts don't.
       // Function keys (arrows and the like) carry AppKit's private-use
@@ -587,27 +590,12 @@ void Tab::SendInput(const ne_input_event& event) {
           !(event.flags & NE_INPUT_FLAG_NO_CHAR)) {
         input::NativeWebKeyboardEvent char_event(gfx::NativeEvent{ns_event});
         char_event.SetType(blink::WebInputEvent::Type::kChar);
-        host->ForwardKeyboardEvent(char_event);
+        mac_view->ForwardKeyboardEvent(char_event, latency);
       }
+      mac_view->EndKeyboardEvent();
       break;
     }
   }
-}
-
-void Tab::EndWheel() {
-  wheel_in_progress_ = false;
-  content::RenderWidgetHostView* rwhv = view();
-  if (!rwhv) {
-    return;
-  }
-  blink::WebMouseWheelEvent wheel(blink::WebInputEvent::Type::kMouseWheel,
-                                  blink::WebInputEvent::kNoModifiers,
-                                  base::TimeTicks::Now());
-  wheel.SetPositionInWidget(last_wheel_position_);
-  wheel.SetPositionInScreen(last_wheel_position_);
-  wheel.phase = blink::WebMouseWheelEvent::kPhaseEnded;
-  wheel.delta_units = ui::ScrollGranularity::kScrollByPrecisePixel;
-  rwhv->GetRenderWidgetHost()->ForwardWheelEvent(wheel);
 }
 
 void Tab::Edit(ne_edit_command command) {
