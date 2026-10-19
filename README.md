@@ -11,7 +11,7 @@ app repository; section numbers below refer to it. Private; proprietary.
 | --- | --- |
 | `CHROMIUM_VERSION` | The Chromium tag we build (§5.5: Extended Stable). |
 | `api/ne_engine.h` | The C embedding API (§2.2). |
-| `engine/` | NotolibraEngine.framework (on `//content`): the API's implementation (`api.mm`), a main delegate for every process, browser client and profile (`browser_client`, `browser_context`: permissions, session SSL state, downloads, persistent storage, cookies encrypted in our own keychain item), `Tab` (`tab.mm`, `tab_ui.mm`: frames as IOSurfaces, the compositor's own output (below), input, dialogs, file choosers, context menus, new windows, favicons as UI requests), `view_bridge` (RenderWidgetHostViewMac's NSView calls as data: cursors, `<select>`, tooltips, IME), `request_filter` (the app's content filter in front of every page's URLLoaderFactory, on the IO thread), `system_drag` (page drags become system drags only from a window someone can see, below), `frame_agent.mojom` and `renderer/` (document-start scripts run as each frame's main-world context is created), `download_delegate`, the sandboxed helper app, and the framework's own .pak. |
+| `engine/` | NotolibraEngine.framework (on `//content`): the API's implementation (`api.mm`), a main delegate for every process, browser client and profile (`browser_client`, `browser_context`: permissions, session SSL state, downloads, persistent storage, cookies encrypted in our own keychain item), `Tab` (`tab.mm`, `tab_ui.mm`: frames as IOSurfaces, the compositor's own output (below), input, dialogs, file choosers, context menus, new windows, favicons as UI requests), `view_bridge` (RenderWidgetHostViewMac's NSView calls as data: cursors, `<select>`, tooltips, IME), `request_filter` (the app's content filter in front of every page's URLLoaderFactory, on the IO thread), `system_drag` (page drags become system drags only from a window someone can see, below), `frame_agent.mojom` and `renderer/` (document-start scripts run as each frame's main-world context is created; error pages the browser sends with the commit), paint holding across navigations and the app's surface colour (below), `download_delegate`, the sandboxed helper app, and the framework's own .pak. |
 | `proto/` | The Phase 0 gpui host: a standalone cargo project that shows a tab in a GPUI Fast composition surface and runs the Phase 0 checks hidden (`proto/run_checks`). |
 | `test/engine/` | `run_smoke`: the engine from a plain AppKit host, hidden. |
 | `build/args/` | GN args: `common.gn` (§3.2, §5.1), `dev.gn`, `release_test.gn`, `official.gn`, and `clt.gn` for building without Xcode. |
@@ -85,6 +85,51 @@ copied it in the display's next pass: a second draw and a GPU copy per frame,
 and the frame a pass later. `--notolibra-frame-source=capture` brings the
 capturer back for comparison. `ne_frame.capture_time_us` is when the engine
 had the frame (`base::TimeTicks` microseconds), so hosts can time the stages.
+
+## Paint holding and the surface colour
+
+No frame between two pages is blank (October 19, 2026, after Macklin saw a
+white frame between a page and the search results he typed for). Measured
+with the app's `NOTOLIBRA_FLASH_TEST` (native/README.md), which samples every
+frame delivered: with RenderDocument (on by default) every cross-document
+navigation of the main frame gets a new `RenderWidgetHostViewMac` with a
+compositor of its own, and that compositor drew its first frames before the
+new renderer's: its background, which is the new document's reported colour
+before it paints (white, or `#121212` for `color-scheme: dark`), not the
+previous page as Chrome's fallback content would show it. A page that paints
+late (a late style sheet or body, a page its scripts build) also drew its
+empty white document after Blink's 500 ms paint holding gave up, and
+content's error page and `about:blank` are empty white documents. A killed
+renderer's reload delivered no frames at all: its widget kept the bridge of
+the view that died.
+
+- **Holding** (`Tab::BeginHold`): from `ReadyToCommitNavigation` of a
+  cross-document main-frame navigation (not a back-forward cache restore or
+  prerender activation) until the new document's
+  `OnFirstContentfulPaintInPrimaryMainFrame`, no frame is delivered, and the
+  frame on screen is delivered once more as a CPU copy in an IOSurface of the
+  engine's own (the compositor, maybe a recycled one, draws into its buffers
+  again). The paint ends the hold with the first display frame drawn after a
+  renderer frame activated (`RenderFrameMetadataProvider`) and no earlier
+  than 25 ms before the paint's presentation time (frames reach the view up
+  to about one refresh before it; 16 ms measured at 120 Hz). A loaded page
+  that never paints contentful content ends it with a frame that isn't blank
+  (a uniform colour other than the surface colour); 5 s ends it whatever. A
+  new tab holds until its first page paints. `on_first_paint` reports each
+  hold's end, after its frame.
+- **Surface colour** (`ne_tab_config.surface_color_argb`,
+  `ne_tab_set_surface_color`): every main-frame view's background (as
+  Chrome's `ContentsWebView` sets its window colour), the background of
+  `about:blank` the app opened (a style added at document start; pages' own
+  about:blank documents are left alone), and the error page, which the
+  browser builds (`Tab::ErrorPageHtml`: the address and the net error, in the
+  surface colour) and sends with the commit (`FrameAgent.SetErrorPage`,
+  answered from `RendererClient::PrepareErrorPage`). The page's base
+  background stays white (`background_color_argb`): pages without a
+  background of their own are white on the web.
+- **A crashed renderer:** bridges whose view went away while the widget
+  stayed are dropped (`Tab::DropStaleBridges`), so the reload's new view gets
+  one.
 
 ## Input
 

@@ -49,6 +49,21 @@ void FrameAgent::SetDocumentStartScripts(const std::string& script,
   blank_child_script_ = blank_child_script;
 }
 
+void FrameAgent::SetErrorPage(const std::string& html) {
+  error_page_ = html;
+}
+
+// static
+std::string FrameAgent::TakeErrorPage(content::RenderFrame* render_frame) {
+  auto it = Agents().find(render_frame);
+  if (it == Agents().end()) {
+    return std::string();
+  }
+  std::string html;
+  html.swap(it->second->error_page_);
+  return html;
+}
+
 void FrameAgent::DidCreateScriptContext(v8::Local<v8::Context> context,
                                         int32_t world_id) {
   if (world_id != 0) {

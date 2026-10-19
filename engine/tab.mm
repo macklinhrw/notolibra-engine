@@ -5,12 +5,16 @@
 #import <AppKit/AppKit.h>
 
 #include <algorithm>
+#include <cstdlib>
+#include <cstring>
 #include <utility>
 
 #include "base/apple/owned_objc.h"
 #include "base/json/json_writer.h"
 #include "base/compiler_specific.h"
 #include "base/logging.h"
+#include "base/strings/escape.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
@@ -33,6 +37,7 @@
 #include "notolibra/engine/frame_agent.mojom.h"
 #include "notolibra/engine/view_bridge.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
+#include "net/base/net_errors.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
@@ -42,6 +47,7 @@
 #include "ui/base/cocoa/remote_layer_api.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/gfx/geometry/point_f.h"
+#include "ui/gfx/color_utils.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size_conversions.h"
 #include "ui/latency/latency_info.h"
@@ -94,6 +100,92 @@ std::string ToString(ne_string_view view) {
   return view.data ? std::string(view.data, view.length) : std::string();
 }
 
+// How long a navigation's frames may be held at most (BeginHold).
+constexpr base::TimeDelta kHoldTimeout = base::Seconds(5);
+
+std::string CssColor(uint32_t argb) {
+  return base::StringPrintf("#%06x", argb & 0xFFFFFF);
+}
+
+// A copy of `source` in an IOSurface of its own, so the frame stays as it
+// is while the compositor draws into its buffers again.
+base::apple::ScopedCFTypeRef<IOSurfaceRef> CopySurface(IOSurfaceRef source) {
+  const size_t width = IOSurfaceGetWidth(source);
+  const size_t height = IOSurfaceGetHeight(source);
+  const size_t bytes_per_row = IOSurfaceGetBytesPerRow(source);
+  NSDictionary* properties = @{
+    (id)kIOSurfaceWidth : @(width),
+    (id)kIOSurfaceHeight : @(height),
+    (id)kIOSurfaceBytesPerElement : @(IOSurfaceGetBytesPerElement(source)),
+    (id)kIOSurfaceBytesPerRow : @(bytes_per_row),
+    (id)kIOSurfacePixelFormat : @(IOSurfaceGetPixelFormat(source)),
+  };
+  base::apple::ScopedCFTypeRef<IOSurfaceRef> copy(
+      IOSurfaceCreate((__bridge CFDictionaryRef)properties));
+  if (!copy) {
+    return copy;
+  }
+  base::apple::ScopedCFTypeRef<CFTypeRef> color_space(
+      IOSurfaceCopyValue(source, kIOSurfaceColorSpace));
+  if (color_space) {
+    IOSurfaceSetValue(copy.get(), kIOSurfaceColorSpace, color_space.get());
+  }
+  IOSurfaceLock(source, kIOSurfaceLockReadOnly, nullptr);
+  IOSurfaceLock(copy.get(), 0, nullptr);
+  const auto* from = static_cast<const uint8_t*>(IOSurfaceGetBaseAddress(source));
+  auto* to = static_cast<uint8_t*>(IOSurfaceGetBaseAddress(copy.get()));
+  const size_t to_row = IOSurfaceGetBytesPerRow(copy.get());
+  const size_t row = std::min(bytes_per_row, to_row);
+  for (size_t y = 0; y < height; ++y) {
+    // SAFETY: both surfaces are `height` rows of at least `row` bytes.
+    UNSAFE_BUFFERS(std::memcpy(to + y * to_row, from + y * bytes_per_row, row));
+  }
+  IOSurfaceUnlock(copy.get(), 0, nullptr);
+  IOSurfaceUnlock(source, kIOSurfaceLockReadOnly, nullptr);
+  return copy;
+}
+
+// Whether `surface`'s `content` is blank: a grid of points all one colour
+// (BGRA), as a document with nothing painted yet draws its base or canvas
+// colour, unless that colour is `allowed` (the app's surface, as about:blank
+// and Dark Reader's empty pages draw it).
+bool Blank(IOSurfaceRef surface, const gfx::Rect& content, uint32_t allowed) {
+  if (!surface || content.IsEmpty()) {
+    return false;
+  }
+  IOSurfaceLock(surface, kIOSurfaceLockReadOnly, nullptr);
+  const auto* base = static_cast<const uint8_t*>(IOSurfaceGetBaseAddress(surface));
+  const size_t stride = IOSurfaceGetBytesPerRow(surface);
+  auto near = [](int a, int b) { return std::abs(a - b) <= 3; };
+  int first[3] = {-1, -1, -1};
+  bool uniform = true;
+  for (int row = 0; row < 6 && uniform; ++row) {
+    for (int column = 0; column < 8 && uniform; ++column) {
+      const size_t x = content.x() + (2 * column + 1) * content.width() / 16;
+      const size_t y = content.y() + (2 * row + 1) * content.height() / 12;
+      // SAFETY: within the surface (the content rect is inside it).
+      const uint8_t* pixel = UNSAFE_BUFFERS(base + y * stride + x * 4);
+      const int bgr[3] = {UNSAFE_BUFFERS(pixel[0]), UNSAFE_BUFFERS(pixel[1]),
+                          UNSAFE_BUFFERS(pixel[2])};
+      if (first[0] < 0) {
+        first[0] = bgr[0];
+        first[1] = bgr[1];
+        first[2] = bgr[2];
+      } else {
+        uniform = near(bgr[0], first[0]) && near(bgr[1], first[1]) &&
+                  near(bgr[2], first[2]);
+      }
+    }
+  }
+  IOSurfaceUnlock(surface, kIOSurfaceLockReadOnly, nullptr);
+  if (!uniform) {
+    return false;
+  }
+  return !(allowed && near(first[0], allowed & 0xFF) &&
+           near(first[1], (allowed >> 8) & 0xFF) &&
+           near(first[2], (allowed >> 16) & 0xFF));
+}
+
 }  // namespace
 
 gfx::Range ImeRange(int32_t start, int32_t end) {
@@ -120,6 +212,9 @@ Tab::Tab(ne_tab* handle,
   if (config.background_color_argb) {
     web_contents_->SetPageBaseBackgroundColor(config.background_color_argb);
   }
+  if (config.surface_color_argb) {
+    surface_color_ = config.surface_color_argb | 0xFF000000;
+  }
   Init();
   std::string url = ToString(config.url);
   Load(url.empty() ? "about:blank" : url);
@@ -142,6 +237,12 @@ void Tab::Init() {
   ApplySize();
   web_contents_->WasShown();
   EnsureViewBridge();
+  ApplySurfaceColor(view());
+  // A new tab holds until its first page paints (BeginHold).
+  hold_started_ = base::TimeTicks::Now();
+  hold_timeout_.Start(FROM_HERE, kHoldTimeout,
+                      base::BindOnce(&Tab::EndHold, base::Unretained(this),
+                                     "timeout"));
 }
 
 Tab::~Tab() {
@@ -183,7 +284,22 @@ content::RenderWidgetHostView* Tab::view() {
   return web_contents_->GetRenderWidgetHostView();
 }
 
+void Tab::DropStaleBridges() {
+  for (auto it = bridges_.begin(); it != bridges_.end();) {
+    ViewBridge* bridge = it->second.get();
+    if (bridge->alive() && bridge->host() &&
+        bridge->host()->GetView() !=
+            static_cast<content::RenderWidgetHostView*>(bridge->view())) {
+      bridge->ForgetView();
+      it = bridges_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
 void Tab::EnsureViewBridge() {
+  DropStaleBridges();
   content::RenderWidgetHostView* rwhv = view();
   if (!rwhv) {
     return;
@@ -206,8 +322,12 @@ ViewBridge* Tab::current_bridge() {
     return nullptr;
   }
   auto it = bridges_.find(rwhv->GetRenderWidgetHost());
-  return it == bridges_.end() || !it->second->alive() ? nullptr
-                                                       : it->second.get();
+  // Not a bridge left on a view that went away (the widget has a new one).
+  return it == bridges_.end() || !it->second->alive() ||
+                 static_cast<content::RenderWidgetHostView*>(
+                     it->second->view()) != rwhv
+             ? nullptr
+             : it->second.get();
 }
 
 void Tab::ViewBridgeGone(ViewBridge* bridge) {
@@ -300,7 +420,17 @@ void Tab::SetPresenter(const ne_presenter* presenter) {
     if (capturer_) {
       capturer_->RequestRefreshFrame();
     }
-    PresentCompositorFrame(base::TimeTicks::Now());
+    if (holding_) {
+      // The held picture (a copy of the engine's own), if there is one.
+      if (last_delivered_) {
+        HeldFrame frame;
+        frame.surface = last_delivered_;
+        Deliver(std::move(frame), last_delivered_content_,
+                last_delivered_scale_, base::TimeTicks::Now());
+      }
+    } else {
+      PresentCompositorFrame(base::TimeTicks::Now());
+    }
   } else {
     has_presenter_ = false;
     presenter_ = {};
@@ -345,7 +475,16 @@ void Tab::OnCompositorFrame(const gfx::CALayerParams& params) {
   last_output_ = std::move(surface);
   last_output_size_ = params.pixel_size;
   last_output_scale_ = params.scale_factor;
-  PresentCompositorFrame(base::TimeTicks::Now());
+  last_output_time_ = base::TimeTicks::Now();
+  if (holding_) {
+    if (FrameShowsPaint()) {
+      EndHold("painted");
+    } else {
+      MaybeEndHoldAfterLoad();
+    }
+    return;
+  }
+  PresentCompositorFrame(last_output_time_);
 }
 
 void Tab::PresentCompositorFrame(base::TimeTicks produced) {
@@ -381,6 +520,9 @@ void Tab::Deliver(HeldFrame frame,
                       static_cast<double>(content_rect.width()),
                       static_cast<double>(content_rect.height())};
   out.capture_time_us = (produced - base::TimeTicks()).InMicroseconds();
+  last_delivered_.reset(surface, base::scoped_policy::RETAIN);
+  last_delivered_content_ = content_rect;
+  last_delivered_scale_ = scale_factor;
   held_frames_.emplace(id, std::move(frame));
   presenter_.on_frame(presenter_.user_data, &out);
 }
@@ -427,6 +569,10 @@ void Tab::OnFrameCaptured(
   }
   IOSurfaceRef surface = data->get_gpu_memory_buffer_handle().io_surface().get();
   if (!surface || !has_presenter_ || !presenter_.on_frame) {
+    frame.callbacks->Done();
+    return;
+  }
+  if (holding_) {
     frame.callbacks->Done();
     return;
   }
@@ -883,12 +1029,14 @@ void Tab::DidStartNavigation(content::NavigationHandle* navigation_handle) {
 
 void Tab::ReadyToCommitNavigation(
     content::NavigationHandle* navigation_handle) {
-  // The frame's document-start scripts go with the commit (frame_agent.mojom):
-  // channel-associated, so they arrive before the document does.
-  Engine* engine = GetEngine();
-  if (!engine->document_start || navigation_handle->IsSameDocument() ||
-      navigation_handle->IsErrorPage()) {
+  if (navigation_handle->IsSameDocument()) {
     return;
+  }
+  const bool is_main = navigation_handle->IsInPrimaryMainFrame();
+  // A new document in the page: its frames wait for its first contentful
+  // paint. Back-forward cache restores and prerendered pages have painted.
+  if (is_main && !navigation_handle->IsPageActivation()) {
+    BeginHold(navigation_handle->GetNavigationId());
   }
   content::RenderFrameHost* frame = navigation_handle->GetRenderFrameHost();
   if (!frame || !(frame->GetPage().IsPrimary() ||
@@ -896,7 +1044,30 @@ void Tab::ReadyToCommitNavigation(
                       content::RenderFrameHost::LifecycleState::kPendingCommit)) {
     return;
   }
-  const bool is_main = navigation_handle->IsInPrimaryMainFrame();
+  // The frame's messages go with the commit (frame_agent.mojom):
+  // channel-associated, so they arrive before the document does.
+  // (IsErrorPage() is only true once committed.)
+  if (navigation_handle->GetNetErrorCode() != net::OK) {
+    // Content's error page is an empty white document; ours is in the
+    // app's surface colour. No document-start scripts: it isn't a site's.
+    if (is_main) {
+      mojo::AssociatedRemote<mojom::FrameAgent> agent;
+      frame->GetRemoteAssociatedInterfaces()->GetInterface(&agent);
+      agent->SetErrorPage(ErrorPageHtml(navigation_handle));
+    }
+    return;
+  }
+  // about:blank the app opened (typed, or a new tab's) is in its surface
+  // colour, not white. Pages' own about:blank documents are left as they are.
+  std::string blank_style;
+  if (is_main && surface_color_ && navigation_handle->GetURL().IsAboutBlank() &&
+      !navigation_handle->IsRendererInitiated()) {
+    blank_style = BlankPageScript();
+  }
+  Engine* engine = GetEngine();
+  if (!engine->document_start && blank_style.empty()) {
+    return;
+  }
   const std::string url = navigation_handle->GetURL().spec();
   const std::string top =
       is_main ? url
@@ -904,12 +1075,15 @@ void Tab::ReadyToCommitNavigation(
   const ne_frame_id id = navigation_handle->GetFrameTreeNodeId().value();
   auto ask = [&](ne_frame_id frame_id, const std::string& frame_url,
                  bool main) {
+    if (!engine->document_start) {
+      return std::string();
+    }
     const char* script = engine->document_start(
         engine->document_start_data.get(), handle_, frame_id,
         {frame_url.data(), frame_url.size()}, {top.data(), top.size()}, main);
     return script ? std::string(script) : std::string();
   };
-  std::string script = ask(id, url, is_main);
+  std::string script = blank_style + ask(id, url, is_main);
   std::string blank_child = ask(-1, "about:blank", false);
   if (script.empty() && blank_child.empty()) {
     return;
@@ -920,6 +1094,15 @@ void Tab::ReadyToCommitNavigation(
 }
 
 void Tab::DidFinishNavigation(content::NavigationHandle* navigation_handle) {
+  if (holding_ && hold_navigation_ &&
+      navigation_handle->GetNavigationId() == hold_navigation_) {
+    if (navigation_handle->HasCommitted()) {
+      hold_committed_ = true;
+    } else {
+      // It never replaced the document on screen.
+      EndHold("not committed");
+    }
+  }
   if (!navigation_handle->HasCommitted() ||
       navigation_handle->IsSameDocument() ||
       !navigation_handle->GetRenderFrameHost() ||
@@ -928,6 +1111,16 @@ void Tab::DidFinishNavigation(content::NavigationHandle* navigation_handle) {
   }
   NotifyLoadEvent(navigation_handle->GetRenderFrameHost(), NE_LOAD_COMMITTED,
                   navigation_handle->GetURL());
+  // A page from the back-forward cache (or prerendered) has painted
+  // already: no hold, and the app hears so after the commit.
+  if (navigation_handle->IsInPrimaryMainFrame() &&
+      navigation_handle->IsPageActivation()) {
+    if (holding_) {
+      EndHold("page restored");
+    } else {
+      NotifyFirstPaint();
+    }
+  }
 }
 
 void Tab::DidFinishLoad(content::RenderFrameHost* render_frame_host,
@@ -955,12 +1148,14 @@ void Tab::RenderViewReady() {
   EnsureViewBridge();
   EnsureCapture();
   ApplySize();
+  ApplySurfaceColor(view());
 }
 
 void Tab::RenderFrameHostChanged(content::RenderFrameHost* old_host,
                                  content::RenderFrameHost* new_host) {
   if (new_host && !new_host->GetParentOrOuterDocument()) {
     EnsureViewBridge();
+    ApplySurfaceColor(new_host->GetView());
   }
 }
 
@@ -968,15 +1163,184 @@ void Tab::PrimaryPageChanged(content::Page& page) {
   EnsureViewBridge();
   EnsureCapture();
   ApplySize();
+  ApplySurfaceColor(view());
   NotifyNavigationState();
 }
 
-void Tab::DidFirstVisuallyNonEmptyPaint() {
+void Tab::OnFirstContentfulPaintInPrimaryMainFrame(
+    base::TimeTicks presentation_time) {
+  // Only the held document's paint counts (not the old one's, late).
+  if (!holding_ || !(hold_committed_ || !hold_navigation_)) {
+    return;
+  }
+  hold_paint_time_ = presentation_time;
+  if (FrameShowsPaint()) {
+    EndHold("painted");
+    return;
+  }
+  // Its frame hasn't reached the view yet: the next frame ends the hold
+  // (OnCompositorFrame), or this does.
+  hold_paint_wait_.Start(FROM_HERE, base::Milliseconds(150),
+                         base::BindOnce(&Tab::EndHold, base::Unretained(this),
+                                        "painted, no frame"));
+}
+
+void Tab::OnRendererFrame(base::TimeTicks activation_time) {
+  renderer_frame_time_ = activation_time;
+}
+
+bool Tab::RendererDrawnInto(base::TimeTicks frame_time) const {
+  // The display drew this frame after a frame of the page's renderer
+  // activated since the hold began: not the view's background or the
+  // previous page's content standing in for it.
+  return !renderer_frame_time_.is_null() &&
+         renderer_frame_time_ >= hold_started_ &&
+         frame_time > renderer_frame_time_;
+}
+
+bool Tab::FrameShowsPaint() const {
+  // A frame reaches the view as the GPU process swaps it, up to about a
+  // display refresh before the presentation time the paint reports (16 ms
+  // measured at 120 Hz); one drawn earlier than that is from before it.
+  return hold_paint_time_ && last_output_ &&
+         RendererDrawnInto(last_output_time_) &&
+         last_output_time_ >= *hold_paint_time_ - base::Milliseconds(25);
+}
+
+void Tab::PrimaryMainFrameRenderProcessGone(base::TerminationStatus status) {
+  // The crashed view goes; a reload gives the widget a new one.
+  DropStaleBridges();
+  EndHold("renderer gone");
+}
+
+void Tab::BeginHold(int64_t navigation_id) {
+  hold_navigation_ = navigation_id;
+  hold_committed_ = false;
+  hold_paint_time_.reset();
+  hold_paint_wait_.Stop();
+  hold_timeout_.Start(FROM_HERE, kHoldTimeout,
+                      base::BindOnce(&Tab::EndHold, base::Unretained(this),
+                                     "timeout"));
+  if (holding_) {
+    // Already held (a new tab, or a navigation before the last one
+    // painted): the app keeps what it shows.
+    return;
+  }
+  holding_ = true;
+  hold_started_ = base::TimeTicks::Now();
+  // The app keeps the frame it shows, but that is a buffer of a compositor
+  // that may draw into it again (a recycled one, for the new view): it gets
+  // a copy that stays as it is.
+  if (last_delivered_ && has_presenter_ && presenter_.on_frame) {
+    base::apple::ScopedCFTypeRef<IOSurfaceRef> copy =
+        CopySurface(last_delivered_.get());
+    if (copy) {
+      HeldFrame frame;
+      frame.surface = std::move(copy);
+      Deliver(std::move(frame), last_delivered_content_, last_delivered_scale_,
+              hold_started_);
+    }
+  }
+}
+
+void Tab::EndHold(const char* why) {
+  if (!holding_) {
+    return;
+  }
+  holding_ = false;
+  hold_timeout_.Stop();
+  hold_paint_wait_.Stop();
+  hold_paint_time_.reset();
+  VLOG(1) << "hold ended (" << why << ") after "
+          << (base::TimeTicks::Now() - hold_started_).InMilliseconds()
+          << " ms";
+  // The new document's latest frame, if it drew one meanwhile (else its
+  // next frame comes as usual), then the app hears the hold ended.
+  if (last_output_ && last_output_time_ >= hold_started_) {
+    PresentCompositorFrame(last_output_time_);
+  }
+  NotifyFirstPaint();
+}
+
+void Tab::NotifyFirstPaint() {
   if (has_presenter_ && presenter_.on_first_paint) {
     std::optional<SkColor> color = web_contents_->GetBackgroundColor();
     presenter_.on_first_paint(presenter_.user_data,
                               color.value_or(SK_ColorWHITE));
   }
+}
+
+void Tab::MaybeEndHoldAfterLoad() {
+  if (!holding_ || !(hold_committed_ || !hold_navigation_) ||
+      web_contents_->IsLoading() || !last_output_ ||
+      !RendererDrawnInto(last_output_time_)) {
+    return;
+  }
+  gfx::Rect content(last_output_size_);
+  content.Intersect(
+      gfx::Rect(static_cast<int>(IOSurfaceGetWidth(last_output_.get())),
+                static_cast<int>(IOSurfaceGetHeight(last_output_.get()))));
+  // Loaded, but blank: it may still paint (a page its scripts build, an
+  // error page drawing its canvas before its style).
+  if (!Blank(last_output_.get(), content, surface_color_)) {
+    EndHold("loaded");
+  }
+}
+
+void Tab::SetSurfaceColor(uint32_t argb) {
+  surface_color_ = argb ? (argb | 0xFF000000) : 0;
+  ApplySurfaceColor(view());
+  content::RenderFrameHost* main = web_contents_->GetPrimaryMainFrame();
+  if (surface_color_ && main && main->IsRenderFrameLive() &&
+      main->GetLastCommittedURL().IsAboutBlank()) {
+    main->ExecuteJavaScript(base::UTF8ToUTF16(BlankPageScript()),
+                            base::NullCallback());
+  }
+}
+
+void Tab::ApplySurfaceColor(content::RenderWidgetHostView* view) {
+  // Shown wherever the view has no page content yet (Chrome sets its
+  // window's colour the same way, ContentsWebView::UpdateBackgroundColor).
+  if (view && surface_color_) {
+    view->SetBackgroundColor(surface_color_);
+  }
+}
+
+std::string Tab::BlankPageScript() const {
+  // Runs as the document's script context is created, before it has a
+  // root element.
+  return base::StringPrintf(
+      "(() => { const apply = () => { let s = "
+      "document.getElementById('__notolibra_surface'); if (!s) { s = "
+      "document.createElement('style'); s.id = '__notolibra_surface'; "
+      "(document.head || document.documentElement).appendChild(s); } "
+      "s.textContent = ':root { background: %s; color-scheme: %s }'; }; if "
+      "(document.documentElement) apply(); else new MutationObserver((_, o) "
+      "=> { if (document.documentElement) { o.disconnect(); apply(); } "
+      "}).observe(document, { childList: true }); })();\n",
+      CssColor(surface_color_).c_str(),
+      color_utils::IsDark(surface_color_) ? "dark" : "light");
+}
+
+std::string Tab::ErrorPageHtml(content::NavigationHandle* navigation) const {
+  const SkColor background = surface_color_ ? surface_color_ : SK_ColorWHITE;
+  const bool dark = color_utils::IsDark(background);
+  const std::string url = base::EscapeForHTML(navigation->GetURL().spec());
+  const std::string host = base::EscapeForHTML(navigation->GetURL().host());
+  const std::string error = net::ErrorToShortString(navigation->GetNetErrorCode());
+  return base::StringPrintf(
+      "<!doctype html><html><head><meta charset=\"utf-8\"><meta "
+      "name=\"color-scheme\" content=\"%s\"><title>%s</title><style>html "
+      "{ background: %s; color: %s; font: 15px -apple-system, "
+      "BlinkMacSystemFont, sans-serif } body { margin: 0; padding: 72px 48px; "
+      "max-width: 640px } h1 { font-size: 20px; font-weight: 600; margin: 0 0 "
+      "12px } p { margin: 6px 0; opacity: .72; overflow-wrap: anywhere } code "
+      "{ font: 13px ui-monospace, Menlo, monospace; opacity: .6 "
+      "}</style></head><body><h1>This page couldn&rsquo;t be "
+      "loaded</h1><p>%s</p><p><code>%s</code></p></body></html>",
+      dark ? "dark" : "light", host.empty() ? url.c_str() : host.c_str(),
+      CssColor(background).c_str(), dark ? "#e6e6e6" : "#1f1f1f", url.c_str(),
+      error.c_str());
 }
 
 void Tab::TitleWasSet(content::NavigationEntry* entry) {
@@ -985,6 +1349,7 @@ void Tab::TitleWasSet(content::NavigationEntry* entry) {
 
 void Tab::DidStopLoading() {
   NotifyNavigationState();
+  MaybeEndHoldAfterLoad();
 }
 
 void Tab::RunJavaScriptDialog(content::WebContents* web_contents,

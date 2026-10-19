@@ -371,12 +371,19 @@ NE_EXPORT ne_status ne_tab_create(ne_window* window,
   if (!notolibra::OnMainThread()) {
     return NE_ERR_WRONG_THREAD;
   }
-  if (!window || !config || !out_tab || config->size < sizeof(ne_tab_config)) {
+  // Apps built before surface_color_argb pass the shorter struct.
+  if (!window || !config || !out_tab ||
+      config->size < offsetof(ne_tab_config, surface_color_argb)) {
     return NE_ERR_INVALID_ARGUMENT;
   }
+  ne_tab_config full = {};
+  // SAFETY: the caller's struct starts with its own size; at most that
+  // much (and no more than ours) is copied.
+  UNSAFE_BUFFERS(std::memcpy(&full, config,
+                             std::min(config->size, sizeof(full))));
   auto* tab = new ne_tab;
   tab->impl = std::make_unique<notolibra::Tab>(tab, window->profile->context,
-                                               *config);
+                                               full);
   *out_tab = tab;
   return NE_OK;
 }
@@ -428,6 +435,12 @@ NE_EXPORT void ne_tab_set_zoom(ne_tab* tab, double factor) {
 NE_EXPORT void ne_tab_set_visible(ne_tab* tab, bool visible) {
   if (tab) {
     tab->impl->SetVisible(visible);
+  }
+}
+
+NE_EXPORT void ne_tab_set_surface_color(ne_tab* tab, uint32_t argb) {
+  if (tab) {
+    tab->impl->SetSurfaceColor(argb);
   }
 }
 

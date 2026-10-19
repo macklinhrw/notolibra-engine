@@ -29,6 +29,11 @@ class FrameAgent : public content::RenderFrameObserver,
   // mojom::FrameAgent:
   void SetDocumentStartScripts(const std::string& script,
                                const std::string& blank_child_script) override;
+  void SetErrorPage(const std::string& html) override;
+
+  // The error page the browser sent for `render_frame`'s next error
+  // commit, taken once; empty if none.
+  static std::string TakeErrorPage(content::RenderFrame* render_frame);
 
   // content::RenderFrameObserver:
   void DidCreateScriptContext(v8::Local<v8::Context> context,
@@ -44,6 +49,8 @@ class FrameAgent : public content::RenderFrameObserver,
   bool has_pending_ = false;
   // For about:blank children of the current document.
   std::string blank_child_script_;
+  // For the next error page.
+  std::string error_page_;
   mojo::AssociatedReceiverSet<mojom::FrameAgent> receivers_;
 };
 

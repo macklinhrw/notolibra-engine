@@ -9,6 +9,7 @@
 #include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
+#include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_view_mac.h"
 #include "content/public/browser/render_widget_host.h"
 #include "notolibra/engine/engine.h"
@@ -63,6 +64,19 @@ ViewBridge::ViewBridge(Tab* tab,
     return;
   }
   host_->AddObserver(this);
+  MetadataProvider()->AddObserver(this);
+}
+
+content::RenderFrameMetadataProvider* ViewBridge::MetadataProvider() const {
+  return static_cast<content::RenderWidgetHostImpl*>(host_.get())
+      ->render_frame_metadata_provider();
+}
+
+void ViewBridge::OnRenderFrameMetadataChangedAfterActivation(
+    base::TimeTicks activation_time) {
+  if (IsCurrent()) {
+    tab_->OnRendererFrame(activation_time);
+  }
 }
 
 ViewBridge::~ViewBridge() {
@@ -70,6 +84,7 @@ ViewBridge::~ViewBridge() {
     GetEngine()->CancelRequest(popup_runner_->id());
   }
   if (host_) {
+    MetadataProvider()->RemoveObserver(this);
     host_->RemoveObserver(this);
   }
   if (view_) {
@@ -80,11 +95,17 @@ ViewBridge::~ViewBridge() {
 void ViewBridge::RenderWidgetHostDestroyed(content::RenderWidgetHost* host) {
   // The view has shut down (its NSView bridge is gone): nothing is called
   // on it, or by it, any more.
+  MetadataProvider()->RemoveObserver(this);
   host_->RemoveObserver(this);
   host_ = nullptr;
   view_ = nullptr;
   next_ = nullptr;
   tab_->ViewBridgeGone(this);  // May delete |this| later.
+}
+
+void ViewBridge::ForgetView() {
+  view_ = nullptr;
+  next_ = nullptr;
 }
 
 bool ViewBridge::IsCurrent() const {

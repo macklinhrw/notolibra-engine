@@ -20,6 +20,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "content/common/render_widget_host_ns_view.mojom.h"
+#include "content/public/browser/render_frame_metadata_provider.h"
 #include "content/public/browser/render_widget_host_observer.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "ne_engine.h"
@@ -36,7 +37,8 @@ namespace notolibra {
 class Tab;
 
 class ViewBridge : public remote_cocoa::mojom::RenderWidgetHostNSView,
-                   public content::RenderWidgetHostObserver {
+                   public content::RenderWidgetHostObserver,
+                   public content::RenderFrameMetadataProvider::Observer {
  public:
   // Installs itself on `view`, which `host` owns.
   ViewBridge(Tab* tab,
@@ -48,6 +50,10 @@ class ViewBridge : public remote_cocoa::mojom::RenderWidgetHostNSView,
   ~ViewBridge() override;
 
   content::RenderWidgetHostViewMac* view() const { return view_; }
+  content::RenderWidgetHost* host() const { return host_; }
+  // The view went away while its widget stayed (a crashed renderer's):
+  // forget it without calling it.
+  void ForgetView();
   bool alive() const { return view_ != nullptr; }
   ui::TextInputType text_input_type() const { return text_input_type_; }
 
@@ -112,6 +118,16 @@ class ViewBridge : public remote_cocoa::mojom::RenderWidgetHostNSView,
   // content::RenderWidgetHostObserver:
   void RenderWidgetHostDestroyed(content::RenderWidgetHost* host) override;
 
+  // content::RenderFrameMetadataProvider::Observer (the renderer's frames,
+  // for the tab's paint holding):
+  void OnRenderFrameMetadataChangedBeforeActivation(
+      const cc::RenderFrameMetadata& metadata) override {}
+  void OnRenderFrameMetadataChangedAfterActivation(
+      base::TimeTicks activation_time) override;
+  void OnRenderFrameSubmission() override {}
+  void OnLocalSurfaceIdChanged(
+      const cc::RenderFrameMetadata& metadata) override {}
+
  private:
   class PopupRunner;
 
@@ -119,6 +135,8 @@ class ViewBridge : public remote_cocoa::mojom::RenderWidgetHostNSView,
   // the back-forward cache).
   bool IsCurrent() const;
   void PopupHidden(ne_request_id id);
+  // The widget's renderer-frame metadata (`host_` must be set).
+  content::RenderFrameMetadataProvider* MetadataProvider() const;
 
   raw_ptr<Tab> tab_;
   raw_ptr<content::RenderWidgetHost> host_;

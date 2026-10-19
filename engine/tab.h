@@ -15,6 +15,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "base/apple/scoped_cftyperef.h"
@@ -74,6 +75,9 @@ class Tab : public content::WebContentsDelegate,
 
   void Load(const std::string& url);
   void SetPresenter(const ne_presenter* presenter);
+  // The app's surface colour (ne_tab_set_surface_color): the views'
+  // background, about:blank's and error pages'.
+  void SetSurfaceColor(uint32_t argb);
   void SetViewSize(double width, double height, double scale_factor);
   void ReleaseFrame(uint64_t frame_id);
   void SetVisible(bool visible);
@@ -110,6 +114,8 @@ class Tab : public content::WebContentsDelegate,
   content::RenderWidgetHostView* view();
 
   // From the view bridge (view_bridge.h), for the page on screen.
+  // A compositor frame of the page's renderer activated in Viz.
+  void OnRendererFrame(base::TimeTicks activation_time);
   void NotifyCursor(int kind);
   void NotifyTextInputState(int32_t type, uint32_t flags);
   void NotifyImeCancel();
@@ -165,7 +171,10 @@ class Tab : public content::WebContentsDelegate,
   void RenderFrameHostChanged(content::RenderFrameHost* old_host,
                               content::RenderFrameHost* new_host) override;
   void PrimaryPageChanged(content::Page& page) override;
-  void DidFirstVisuallyNonEmptyPaint() override;
+  void OnFirstContentfulPaintInPrimaryMainFrame(
+      base::TimeTicks presentation_time) override;
+  void PrimaryMainFrameRenderProcessGone(
+      base::TerminationStatus status) override;
   void TitleWasSet(content::NavigationEntry* entry) override;
   void DidStopLoading() override;
   void DidStartNavigation(
@@ -257,8 +266,34 @@ class Tab : public content::WebContentsDelegate,
   void NotifyLoadEvent(content::RenderFrameHost* frame,
                        ne_load_event_kind kind,
                        const GURL& url);
+  // Paint holding across navigations (ne_presenter.on_frame): from a main
+  // frame's cross-document commit until the new document's first
+  // contentful paint, its frames aren't delivered, and the app keeps a copy
+  // of the frame it showed. Without holding, the app was given the new
+  // view's first frames: its compositor's background (the new document's
+  // white base, before it paints), and a page that paints late showed
+  // white until it did.
+  void BeginHold(int64_t navigation_id);
+  void EndHold(const char* why);
+  // ne_presenter.on_first_paint.
+  void NotifyFirstPaint();
+  // Ends the hold once the page finished loading and its latest frame isn't
+  // blank (a page that never paints contentful content).
+  void MaybeEndHoldAfterLoad();
+  // Whether the display frame at `frame_time` has the page renderer's
+  // content, and whether the latest shows the reported first paint.
+  bool RendererDrawnInto(base::TimeTicks frame_time) const;
+  bool FrameShowsPaint() const;
+  // The view's colour and the documents the engine makes.
+  void ApplySurfaceColor(content::RenderWidgetHostView* view);
+  std::string ErrorPageHtml(content::NavigationHandle* navigation) const;
+  std::string BlankPageScript() const;
+
   // Puts a view bridge on the page's view if it has none yet.
   void EnsureViewBridge();
+  // Forgets bridges whose view went away while their widget stayed (a
+  // crashed renderer's): a reload gives the widget a new view.
+  void DropStaleBridges();
   ViewBridge* current_bridge();
   // The frame `id` names (0: the main frame), or null.
   content::RenderFrameHost* FindFrame(ne_frame_id id);
@@ -282,6 +317,28 @@ class Tab : public content::WebContentsDelegate,
   base::apple::ScopedCFTypeRef<IOSurfaceRef> last_output_;
   gfx::Size last_output_size_;
   float last_output_scale_ = 2.f;
+  base::TimeTicks last_output_time_;
+  // The frame last delivered, its content and scale (the hold copies it).
+  base::apple::ScopedCFTypeRef<IOSurfaceRef> last_delivered_;
+  gfx::Rect last_delivered_content_;
+  float last_delivered_scale_ = 2.f;
+
+  // The app's surface colour (opaque ARGB), 0 for none.
+  uint32_t surface_color_ = 0;
+  // Paint holding (BeginHold): a new tab holds until its first page paints.
+  bool holding_ = true;
+  // The held navigation has committed (paints before that are the old
+  // document's).
+  bool hold_committed_ = false;
+  int64_t hold_navigation_ = 0;
+  base::TimeTicks hold_started_;
+  base::OneShotTimer hold_timeout_;
+  // The held document's first contentful paint (its presentation time),
+  // until a frame showing it arrives.
+  std::optional<base::TimeTicks> hold_paint_time_;
+  base::OneShotTimer hold_paint_wait_;
+  // When a frame of the page's renderer last activated (OnRendererFrame).
+  base::TimeTicks renderer_frame_time_;
   bool logged_unexpected_buffer_ = false;
   // One bridge per page view still alive (pages in the back-forward cache
   // keep theirs), by widget.

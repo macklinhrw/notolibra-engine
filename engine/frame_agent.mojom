@@ -10,4 +10,8 @@ interface FrameAgent {
   // the page's own scripts (scriptlets, Dark Reader). `blank_child_script`
   // is for the about:blank frames the document creates without navigating.
   SetDocumentStartScripts(string script, string blank_child_script);
+
+  // Sent as the frame is about to commit an error page: the page to show
+  // (ContentRendererClient::PrepareErrorPage), in the app's surface colour.
+  SetErrorPage(string html);
 };

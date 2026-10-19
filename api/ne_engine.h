@@ -168,7 +168,15 @@ typedef struct ne_tab_config {
   size_t size;
   ne_string_view url;                 /* empty: about:blank */
   bool background;                    /* don't activate */
-  uint32_t background_color_argb;     /* drawn until first paint (no white flash) */
+  /* The page's base background (Blink's), what a page that sets no
+   * background of its own draws: opaque white for the web as it is. 0
+   * leaves Chromium's default. */
+  uint32_t background_color_argb;
+  /* The app's surface colour (opaque ARGB; 0: none): what the tab shows
+   * wherever it has no page content to show (the view's background), and
+   * the background of the documents the engine makes itself (about:blank,
+   * error pages). See ne_tab_set_surface_color. */
+  uint32_t surface_color_argb;
 } ne_tab_config;
 
 NE_EXPORT ne_status ne_tab_create(ne_window* window, const ne_tab_config* config,
@@ -182,6 +190,10 @@ NE_EXPORT void ne_tab_reload(ne_tab* tab, bool bypass_cache);
 NE_EXPORT void ne_tab_stop(ne_tab* tab);
 NE_EXPORT void ne_tab_set_zoom(ne_tab* tab, double factor);   /* 1.0 = 100% */
 NE_EXPORT void ne_tab_set_visible(ne_tab* tab, bool visible);
+/* Changes the tab's surface colour (ne_tab_config.surface_color_argb), for
+ * instance with the app's theme: its views at once, an open about:blank,
+ * and error pages from then on. */
+NE_EXPORT void ne_tab_set_surface_color(ne_tab* tab, uint32_t argb);
 NE_EXPORT void ne_tab_discard(ne_tab* tab);   /* free the renderer, keep history */
 
 typedef enum ne_find_flags {
@@ -260,9 +272,21 @@ typedef struct ne_presenter {
    * so the app can present it without a CPU copy. On macOS the buffer is
    * the page compositor's own output (sRGB), which it draws into again
    * once the page has drawn four newer frames: hold at most the newest few,
-   * and copy what must outlast that (a frozen pane's picture). */
+   * and copy what must outlast that (a frozen pane's picture).
+   *
+   * Paint holding: from the moment a cross-document navigation of the main
+   * frame is about to commit until the new document's first contentful
+   * paint, no frame of the new document is delivered; the app keeps the
+   * last one, which the engine has just delivered again as a copy of its
+   * own (outside the compositor's buffers, so it stays as it is). The same
+   * holds for a new tab until its first page paints. A hold also ends when
+   * the page finished loading and its latest frame isn't blank white, or
+   * after 5 s. Back-forward cache restores aren't held. */
   void (*on_frame)(void* user_data, const ne_frame* frame);
-  /* First visually non-empty paint, and the page's background colour. */
+  /* A hold ended (on_frame): the new document's first frame follows at
+   * once. Called once per navigation (and for a new tab's first page) at
+   * its first contentful paint, or when the hold gave up; with the page's
+   * background colour. */
   void (*on_first_paint)(void* user_data, uint32_t background_color_argb);
   void (*on_cursor)(void* user_data, int32_t cursor_kind);
   void (*on_scroll)(void* user_data, double x, double y,
