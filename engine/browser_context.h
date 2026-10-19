@@ -13,8 +13,17 @@
 #include "base/files/file_path.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/permission_controller_delegate.h"
+#include "content/public/browser/platform_notification_service.h"
 #include "content/public/browser/ssl_host_state_delegate.h"
 #include "net/base/net_errors.h"
+
+namespace client_hints {
+class InMemoryClientHintsControllerDelegate;
+}
+
+namespace network {
+class NetworkQualityTracker;
+}
 
 namespace notolibra {
 
@@ -111,11 +120,54 @@ class SslHostState : public content::SSLHostStateDelegate {
   std::set<std::pair<std::string, int>> insecure_content_;
 };
 
+// Notifications, which the engine doesn't show yet. The service exists so
+// that Notification.permission reports the permission's real state:
+// "default" until a site asks, then the app's answer (PermissionManager's
+// prompt). Content reports "denied" for a profile without a service, a
+// headless browser's tell that Cloudflare's challenge looks for.
+class NotificationService : public content::PlatformNotificationService {
+ public:
+  NotificationService();
+  ~NotificationService() override;
+
+  // content::PlatformNotificationService:
+  void DisplayNotification(
+      const std::string& notification_id,
+      const GURL& origin,
+      const GURL& document_url,
+      const blink::PlatformNotificationData& notification_data,
+      const blink::NotificationResources& notification_resources) override;
+  void DisplayPersistentNotification(
+      const std::string& notification_id,
+      const GURL& service_worker_origin,
+      const GURL& origin,
+      const blink::PlatformNotificationData& notification_data,
+      const blink::NotificationResources& notification_resources) override;
+  void CloseNotification(const std::string& notification_id) override;
+  void ClosePersistentNotification(
+      const std::string& notification_id) override;
+  void GetDisplayedNotifications(
+      DisplayedNotificationsCallback callback) override;
+  void GetDisplayedNotificationsForOrigin(
+      const GURL& origin,
+      DisplayedNotificationsCallback callback) override;
+  void ScheduleTrigger(base::Time timestamp) override;
+  base::Time ReadNextTriggerTimestamp() override;
+  int64_t ReadNextPersistentNotificationId() override;
+  void RecordNotificationUkmEvent(
+      const content::NotificationDatabaseData& data) override;
+
+ private:
+  int64_t next_persistent_id_ = 1;
+};
+
 class DownloadDelegate;
 
 class BrowserContext : public content::BrowserContext {
  public:
-  explicit BrowserContext(const base::FilePath& path);
+  // `network_quality_tracker` (the network hints) outlives the context.
+  BrowserContext(const base::FilePath& path,
+                 network::NetworkQualityTracker* network_quality_tracker);
   ~BrowserContext() override;
 
   // content::BrowserContext:
@@ -150,6 +202,10 @@ class BrowserContext : public content::BrowserContext {
   std::unique_ptr<PermissionManager> permission_manager_;
   std::unique_ptr<SslHostState> ssl_host_state_;
   std::unique_ptr<DownloadDelegate> download_delegate_;
+  std::unique_ptr<NotificationService> notification_service_;
+  // Sec-CH-UA and the other client hints, and the Accept-CH cache.
+  std::unique_ptr<client_hints::InMemoryClientHintsControllerDelegate>
+      client_hints_;
 };
 
 }  // namespace notolibra

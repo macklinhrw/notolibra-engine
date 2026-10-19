@@ -12,6 +12,7 @@
 #include "content/public/browser/browser_main_parts.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/login_delegate.h"
+#include "services/network/public/cpp/network_quality_tracker.h"
 
 namespace display {
 class ScopedNativeScreen;
@@ -47,6 +48,10 @@ class BrowserMainParts : public content::BrowserMainParts {
   // Cookies are encrypted with a key in our own keychain item (plan.md §4.6).
   std::unique_ptr<os_crypt_async::OSCryptAsync> os_crypt_;
   std::unique_ptr<CookieEncryptionProviderImpl> cookie_encryption_;
+  std::unique_ptr<network::NetworkQualityTracker> network_quality_tracker_;
+  std::unique_ptr<
+      network::NetworkQualityTracker::RTTAndThroughputEstimatesObserver>
+      network_quality_observer_;
   std::unique_ptr<BrowserContext> browser_context_;
 };
 
@@ -61,6 +66,9 @@ class BrowserClient : public content::ContentBrowserClient {
   std::string GetUserAgent() override;
   blink::UserAgentMetadata GetUserAgentMetadata() override;
   std::string GetAcceptLangs(content::BrowserContext* context) override;
+  void UpdateRendererPreferencesForWorker(
+      content::BrowserContext* browser_context,
+      blink::RendererPreferences* out_prefs) override;
   void ConfigureNetworkContextParams(
       content::BrowserContext* context,
       bool in_memory,

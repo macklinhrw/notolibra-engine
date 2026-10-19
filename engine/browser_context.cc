@@ -5,6 +5,8 @@
 #include <vector>
 
 #include "base/files/file_util.h"
+#include "components/client_hints/browser/in_memory_client_hints_controller_delegate.h"
+#include "components/embedder_support/user_agent_utils.h"
 #include "base/strings/string_util.h"
 #include "content/public/browser/download_manager.h"
 #include "content/public/browser/permission_request_description.h"
@@ -249,8 +251,64 @@ bool SslHostState::HasAllowExceptionForAnyHost(
   return !allowed_.empty() || !http_allowed_.empty();
 }
 
+NotificationService::NotificationService() = default;
+NotificationService::~NotificationService() = default;
+
+void NotificationService::DisplayNotification(
+    const std::string& notification_id,
+    const GURL& origin,
+    const GURL& document_url,
+    const blink::PlatformNotificationData& notification_data,
+    const blink::NotificationResources& notification_resources) {}
+
+void NotificationService::DisplayPersistentNotification(
+    const std::string& notification_id,
+    const GURL& service_worker_origin,
+    const GURL& origin,
+    const blink::PlatformNotificationData& notification_data,
+    const blink::NotificationResources& notification_resources) {}
+
+void NotificationService::CloseNotification(
+    const std::string& notification_id) {}
+
+void NotificationService::ClosePersistentNotification(
+    const std::string& notification_id) {}
+
+void NotificationService::GetDisplayedNotifications(
+    DisplayedNotificationsCallback callback) {
+  std::move(callback).Run({}, /*supports_synchronization=*/true);
+}
+
+void NotificationService::GetDisplayedNotificationsForOrigin(
+    const GURL& origin,
+    DisplayedNotificationsCallback callback) {
+  std::move(callback).Run({}, /*supports_synchronization=*/true);
+}
+
+void NotificationService::ScheduleTrigger(base::Time timestamp) {}
+
+base::Time NotificationService::ReadNextTriggerTimestamp() {
+  return base::Time::Max();
+}
+
+int64_t NotificationService::ReadNextPersistentNotificationId() {
+  return next_persistent_id_++;
+}
+
+void NotificationService::RecordNotificationUkmEvent(
+    const content::NotificationDatabaseData& data) {}
+
 // ne_app_init() creates the directory, before IO is disallowed here.
-BrowserContext::BrowserContext(const base::FilePath& path) : path_(path) {}
+BrowserContext::BrowserContext(
+    const base::FilePath& path,
+    network::NetworkQualityTracker* network_quality_tracker)
+    : path_(path),
+      notification_service_(std::make_unique<NotificationService>()),
+      client_hints_(
+          std::make_unique<client_hints::InMemoryClientHintsControllerDelegate>(
+              network_quality_tracker,
+              base::BindRepeating([](const GURL&) { return true; }),
+              embedder_support::GetUserAgentMetadata())) {}
 
 BrowserContext::~BrowserContext() {
   // The download manager calls its delegate as it shuts down, which the
@@ -299,7 +357,7 @@ storage::SpecialStoragePolicy* BrowserContext::GetSpecialStoragePolicy() {
 
 content::PlatformNotificationService*
 BrowserContext::GetPlatformNotificationService() {
-  return nullptr;
+  return notification_service_.get();
 }
 
 content::PushMessagingService* BrowserContext::GetPushMessagingService() {
@@ -333,7 +391,7 @@ BrowserContext::GetReduceAcceptLanguageControllerDelegate() {
 
 content::ClientHintsControllerDelegate*
 BrowserContext::GetClientHintsControllerDelegate() {
-  return nullptr;
+  return client_hints_.get();
 }
 
 content::BackgroundFetchDelegate* BrowserContext::GetBackgroundFetchDelegate() {

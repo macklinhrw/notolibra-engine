@@ -16,6 +16,7 @@
 #include "content/public/browser/browser_main_runner.h"
 #include "content/public/common/content_paths.h"
 #include "content/public/common/content_switches.h"
+#include "content/public/common/webplugininfo.h"
 #include "content/public/renderer/content_renderer_client.h"
 #include "notolibra/engine/browser_client.h"
 #include "notolibra/engine/engine.h"
@@ -84,6 +85,29 @@ std::string ContentClient::GetDataResourceString(int resource_id) {
 gfx::Image& ContentClient::GetNativeImageNamed(int resource_id) {
   return ui::ResourceBundle::GetSharedInstance().GetNativeImageNamed(
       resource_id);
+}
+
+void ContentClient::AddPlugins(std::vector<content::WebPluginInfo>* plugins) {
+  // PDFs open in the app (pdf.h), so pages are told there is a PDF viewer,
+  // as Chrome's, Electron's and CEF's are: navigator.pdfViewerEnabled, and
+  // navigator.plugins and mimeTypes list Chrome's five PDF viewers and its
+  // two PDF types (Blink makes the lists from one plugin with
+  // application/pdf). Empty lists are a headless browser's tell. The plugin
+  // is never created: the PDF throttle answers PDF navigations, and the
+  // app's script turns <embed> and <object> PDFs into frames.
+  Engine* engine = GetEngine();
+  if (!engine || engine->pdf_directory.empty()) {
+    return;
+  }
+  content::WebPluginInfo pdf;
+  pdf.name = u"Chromium PDF Viewer";
+  pdf.desc = u"Portable Document Format";
+  pdf.path = base::FilePath(FILE_PATH_LITERAL("internal-pdf-viewer"));
+  pdf.type = content::WebPluginInfo::PLUGIN_TYPE_BROWSER_INTERNAL_PLUGIN;
+  content::WebPluginMimeType mime_type("application/pdf", "pdf",
+                                       "Portable Document Format");
+  pdf.mime_types.push_back(mime_type);
+  plugins->push_back(pdf);
 }
 
 MainDelegate::MainDelegate() = default;

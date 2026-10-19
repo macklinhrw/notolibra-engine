@@ -12,19 +12,24 @@
 #include "components/os_crypt/async/browser/os_crypt_async.h"
 #include "components/os_crypt/common/keychain_password_mac.h"
 #include "content/public/browser/certificate_request_result_type.h"
+#include "content/public/browser/network_quality_observer_factory.h"
+#include "content/public/browser/network_service_instance.h"
 #include "content/public/browser/web_contents.h"
 #include "net/base/auth.h"
 #include "net/base/net_errors.h"
 #include "net/ssl/ssl_info.h"
 #include "notolibra/engine/browser_context.h"
+#include "notolibra/engine/languages.h"
 #include "notolibra/engine/pdf.h"
 #include "notolibra/engine/request_filter.h"
 #include "notolibra/engine/system_drag.h"
 #include "notolibra/engine/tab.h"
 #include "services/network/public/cpp/cookie_encryption_provider_impl.h"
+#include "services/network/public/cpp/network_quality_tracker.h"
 #include "url/origin.h"
 #include "notolibra/engine/engine.h"
 #include "services/network/public/mojom/network_context.mojom.h"
+#include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
 #include "ui/display/screen.h"
 
@@ -55,13 +60,22 @@ int BrowserMainParts::PreMainMessageLoopRun() {
   os_crypt_ = std::make_unique<os_crypt_async::OSCryptAsync>(std::move(providers));
   cookie_encryption_ =
       std::make_unique<CookieEncryptionProviderImpl>(os_crypt_.get());
+  // Network-quality signals for renderers and the network client hints
+  // (as fuchsia's WebEngine sets them up).
+  network_quality_tracker_ = std::make_unique<network::NetworkQualityTracker>(
+      base::BindRepeating(&content::GetNetworkService));
+  network_quality_observer_ =
+      content::CreateNetworkQualityObserver(network_quality_tracker_.get());
   base::FilePath dir = GetEngine()->user_data_dir.Append("Default");
-  browser_context_ = std::make_unique<BrowserContext>(dir);
+  browser_context_ =
+      std::make_unique<BrowserContext>(dir, network_quality_tracker_.get());
   return 0;
 }
 
 void BrowserMainParts::PostMainMessageLoopRun() {
   browser_context_.reset();
+  network_quality_observer_.reset();
+  network_quality_tracker_.reset();
   cookie_encryption_.reset();
   os_crypt_.reset();
 }
@@ -83,20 +97,22 @@ std::string BrowserClient::GetUserAgent() {
 }
 
 blink::UserAgentMetadata BrowserClient::GetUserAgentMetadata() {
-  blink::UserAgentMetadata metadata;
-  metadata.brand_version_list.emplace_back("Chromium", NE_CHROMIUM_MAJOR);
-  metadata.brand_version_list.emplace_back("Notolibra", "0");
-  metadata.brand_full_version_list.emplace_back("Chromium", NE_CHROMIUM_VERSION);
-  metadata.full_version = NE_CHROMIUM_VERSION;
-  metadata.platform = "macOS";
-  metadata.architecture = "arm";
-  metadata.bitness = "64";
-  metadata.mobile = false;
-  return metadata;
+  // Chrome's own client hints, as a Chromium build sends them: the GREASE
+  // brand and "Chromium" in brands and fullVersionList alike, and the
+  // platform version. Until October 19, 2026 a hand-made list (Chromium and
+  // "Notolibra", no GREASE, fullVersionList without the second brand, no
+  // platform version) kept Cloudflare's challenge from ever clearing.
+  return embedder_support::GetUserAgentMetadata();
 }
 
 std::string BrowserClient::GetAcceptLangs(content::BrowserContext* context) {
-  return "en-US,en";
+  return AcceptLanguages();
+}
+
+void BrowserClient::UpdateRendererPreferencesForWorker(
+    content::BrowserContext* browser_context,
+    blink::RendererPreferences* out_prefs) {
+  out_prefs->accept_languages = AcceptLanguages();
 }
 
 void BrowserClient::ConfigureNetworkContextParams(
@@ -107,7 +123,9 @@ void BrowserClient::ConfigureNetworkContextParams(
     cert_verifier::mojom::CertVerifierCreationParams*
         cert_verifier_creation_params) {
   network_context_params->user_agent = GetUserAgent();
-  network_context_params->accept_language = GetAcceptLangs(context);
+  // With Chrome's q-values; navigator.languages is the same list
+  // (languages.h).
+  network_context_params->accept_language = AcceptLanguageHeader();
   network_context_params->enable_zstd = true;
   if (in_memory) {
     return;

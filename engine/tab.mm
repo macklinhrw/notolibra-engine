@@ -36,8 +36,10 @@
 #include "content/browser/renderer_host/render_widget_host_view_mac.h"
 #include "notolibra/engine/engine.h"
 #include "notolibra/engine/frame_agent.mojom.h"
+#include "notolibra/engine/languages.h"
 #include "notolibra/engine/pdf.h"
 #include "notolibra/engine/view_bridge.h"
+#include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "net/base/net_errors.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
@@ -232,6 +234,11 @@ Tab::Tab(ne_tab* handle, std::unique_ptr<content::WebContents> contents)
 
 void Tab::Init() {
   web_contents_->SetDelegate(this);
+  // navigator.languages: the list the Accept-Language header is made from
+  // (languages.h). Without it Blink reported only "en-US".
+  web_contents_->GetMutableRendererPrefs()->accept_languages =
+      AcceptLanguages();
+  web_contents_->SyncRendererPrefs();
   Observe(web_contents_.get());
   GetEngine()->tabs.push_back(this);
   // Renderers keep producing frames although no window shows them

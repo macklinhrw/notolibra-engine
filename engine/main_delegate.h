@@ -33,6 +33,7 @@ class ContentClient : public content::ContentClient {
       int resource_id) override;
   std::string GetDataResourceString(int resource_id) override;
   gfx::Image& GetNativeImageNamed(int resource_id) override;
+  void AddPlugins(std::vector<content::WebPluginInfo>* plugins) override;
 };
 
 // One delegate for every process type. In the browser process, RunProcess()

@@ -216,6 +216,50 @@ not a normal exit, and not for tabs being closed); the app draws its own
 `ne_tab`) never report it. The app's check: `NOTOLIBRA_WEBPDF_TEST=1`
 (native/README.md, Browser engine → PDFs, downloads and crashed pages).
 
+## What pages see of the browser
+
+Bot checks (Cloudflare's challenge, Turnstile) compare what a page can read
+of the browser with what Chrome would show. Until October 19, 2026 the
+engine disagreed with Chrome in four ways, and Cloudflare's challenge never
+cleared (its "Verify you are human" box came back after every click; the
+page Macklin hit was a novelupdates.com series page). Now, as in Chrome:
+
+- **Client hints** are `embedder_support::GetUserAgentMetadata()` (a
+  Chromium build's: Chromium and a GREASE brand such as `Not:A-Brand`, the
+  same list with full versions in `fullVersionList`, the macOS version as
+  `platformVersion`), for script (`BrowserClient::GetUserAgentMetadata`) and
+  for the `Sec-CH-UA*` headers alike: the profile has a client-hints
+  delegate (`client_hints::InMemoryClientHintsControllerDelegate`, as
+  fuchsia's WebEngine has, fed by a `NetworkQualityTracker` in
+  `BrowserMainParts`). Before, script saw a hand-made list (Chromium and
+  "Notolibra", no GREASE, `fullVersionList` without the second brand, no
+  platform version), and requests carried no `Sec-CH-UA` headers at all,
+  with Chrome's user agent string. There is no Notolibra brand: a plain
+  Chromium list is what Chromium builds send, and what passes.
+- **Languages** come from the system's preferred languages
+  (`engine/languages.mm`: `[NSLocale preferredLanguages]`, script subtags
+  dropped, each followed by its base language as Chrome's accept-languages
+  preference reads, e.g. `en-US,en`). `navigator.languages` is that list
+  (renderer preferences, set per tab and for workers) and `Accept-Language`
+  the same with Chrome's q-values (`en-US,en;q=0.9`). Before, script saw
+  `["en-US"]` and requests sent `en-US,en`.
+- **Notifications**: the profile has a `PlatformNotificationService`
+  (`NotificationService`, `engine/browser_context.h`), so
+  `Notification.permission` reads `"default"` until a site asks; content
+  reports `"denied"` for a profile without one, a headless browser's tell.
+  Asking goes through the app's permission prompt as before. The engine
+  doesn't show notifications yet: the service drops them.
+- **The PDF viewer**: when the app handles PDFs (`pdf_directory`, above),
+  `ContentClient::AddPlugins` registers one `application/pdf` plugin, as
+  Electron and CEF do, so `navigator.pdfViewerEnabled` is true and
+  `navigator.plugins` and `mimeTypes` list Chrome's five PDF viewers and two
+  types (Blink makes those fixed lists). The plugin is never created.
+
+Left as they are: `window.chrome` is undefined (as in Electron), and the
+hidden verification window's `outerWidth`/`outerHeight` equal the page's
+and its `screenX`/`screenY` are 0. The app's check:
+`NOTOLIBRA_ENGINE_UI_TEST=1` (its first step, `engine-ui: fingerprint:`).
+
 ## Document-start parts
 
 The app's document-start script (`ne_document_start_fn`) may hold several
