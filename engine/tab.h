@@ -337,6 +337,9 @@ class Tab : public content::WebContentsDelegate,
   // until a frame showing it arrives.
   std::optional<base::TimeTicks> hold_paint_time_;
   base::OneShotTimer hold_paint_wait_;
+  // When the held page finished loading (null: not yet).
+  base::TimeTicks hold_loaded_at_;
+  base::OneShotTimer hold_load_grace_;
   // When a frame of the page's renderer last activated (OnRendererFrame).
   base::TimeTicks renderer_frame_time_;
   bool logged_unexpected_buffer_ = false;

@@ -113,8 +113,10 @@ the view that died.
   renderer frame activated (`RenderFrameMetadataProvider`) and no earlier
   than 25 ms before the paint's presentation time (frames reach the view up
   to about one refresh before it; 16 ms measured at 120 Hz). A loaded page
-  that never paints contentful content ends it with a frame that isn't blank
-  (a uniform colour other than the surface colour); 5 s ends it whatever. A
+  that never paints contentful content ends it, 300 ms after the load (a
+  page's paint often comes just after), with a frame that isn't blank (one
+  colour, every second pixel, other than the surface colour, so a form
+  control or a spinner counts); 5 s ends it whatever. A
   new tab holds until its first page paints. `on_first_paint` reports each
   hold's end, after its frame.
 - **Surface colour** (`ne_tab_config.surface_color_argb`,

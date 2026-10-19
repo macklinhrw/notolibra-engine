@@ -102,6 +102,9 @@ std::string ToString(ne_string_view view) {
 
 // How long a navigation's frames may be held at most (BeginHold).
 constexpr base::TimeDelta kHoldTimeout = base::Seconds(5);
+// How long a loaded page without contentful paint waits for one before its
+// frame may end the hold (MaybeEndHoldAfterLoad).
+constexpr base::TimeDelta kHoldLoadGrace = base::Milliseconds(300);
 
 std::string CssColor(uint32_t argb) {
   return base::StringPrintf("#%06x", argb & 0xFFFFFF);
@@ -145,10 +148,12 @@ base::apple::ScopedCFTypeRef<IOSurfaceRef> CopySurface(IOSurfaceRef source) {
   return copy;
 }
 
-// Whether `surface`'s `content` is blank: a grid of points all one colour
-// (BGRA), as a document with nothing painted yet draws its base or canvas
-// colour, unless that colour is `allowed` (the app's surface, as about:blank
-// and Dark Reader's empty pages draw it).
+// Whether `surface`'s `content` is blank: every second pixel of every
+// second row one colour (BGRA), as a document with nothing painted yet draws
+// its base or canvas colour, unless that colour is `allowed` (the app's
+// surface, as about:blank and Dark Reader's empty pages draw it). Dense, so a
+// form control or a thin rule on an empty page counts as painted (about 2 ms
+// for a 2,700 × 1,600 frame; only while a loaded page is held).
 bool Blank(IOSurfaceRef surface, const gfx::Rect& content, uint32_t allowed) {
   if (!surface || content.IsEmpty()) {
     return false;
@@ -159,12 +164,10 @@ bool Blank(IOSurfaceRef surface, const gfx::Rect& content, uint32_t allowed) {
   auto near = [](int a, int b) { return std::abs(a - b) <= 3; };
   int first[3] = {-1, -1, -1};
   bool uniform = true;
-  for (int row = 0; row < 6 && uniform; ++row) {
-    for (int column = 0; column < 8 && uniform; ++column) {
-      const size_t x = content.x() + (2 * column + 1) * content.width() / 16;
-      const size_t y = content.y() + (2 * row + 1) * content.height() / 12;
+  for (int y = content.y(); y < content.bottom() && uniform; y += 2) {
+    for (int x = content.x(); x < content.right() && uniform; x += 2) {
       // SAFETY: within the surface (the content rect is inside it).
-      const uint8_t* pixel = UNSAFE_BUFFERS(base + y * stride + x * 4);
+      const uint8_t* pixel = UNSAFE_BUFFERS(base + static_cast<size_t>(y) * stride + static_cast<size_t>(x) * 4);
       const int bgr[3] = {UNSAFE_BUFFERS(pixel[0]), UNSAFE_BUFFERS(pixel[1]),
                           UNSAFE_BUFFERS(pixel[2])};
       if (first[0] < 0) {
@@ -1218,6 +1221,8 @@ void Tab::BeginHold(int64_t navigation_id) {
   hold_committed_ = false;
   hold_paint_time_.reset();
   hold_paint_wait_.Stop();
+  hold_loaded_at_ = base::TimeTicks();
+  hold_load_grace_.Stop();
   hold_timeout_.Start(FROM_HERE, kHoldTimeout,
                       base::BindOnce(&Tab::EndHold, base::Unretained(this),
                                      "timeout"));
@@ -1251,6 +1256,8 @@ void Tab::EndHold(const char* why) {
   hold_timeout_.Stop();
   hold_paint_wait_.Stop();
   hold_paint_time_.reset();
+  hold_loaded_at_ = base::TimeTicks();
+  hold_load_grace_.Stop();
   VLOG(1) << "hold ended (" << why << ") after "
           << (base::TimeTicks::Now() - hold_started_).InMilliseconds()
           << " ms";
@@ -1272,8 +1279,9 @@ void Tab::NotifyFirstPaint() {
 
 void Tab::MaybeEndHoldAfterLoad() {
   if (!holding_ || !(hold_committed_ || !hold_navigation_) ||
-      web_contents_->IsLoading() || !last_output_ ||
-      !RendererDrawnInto(last_output_time_)) {
+      web_contents_->IsLoading() || hold_loaded_at_.is_null() ||
+      base::TimeTicks::Now() - hold_loaded_at_ < kHoldLoadGrace ||
+      !last_output_ || !RendererDrawnInto(last_output_time_)) {
     return;
   }
   gfx::Rect content(last_output_size_);
@@ -1349,7 +1357,14 @@ void Tab::TitleWasSet(content::NavigationEntry* entry) {
 
 void Tab::DidStopLoading() {
   NotifyNavigationState();
-  MaybeEndHoldAfterLoad();
+  // A page that never paints contentful content shows once loaded, after a
+  // moment for its paint, which often comes just after the load.
+  if (holding_ && (hold_committed_ || !hold_navigation_)) {
+    hold_loaded_at_ = base::TimeTicks::Now();
+    hold_load_grace_.Start(FROM_HERE, kHoldLoadGrace,
+                           base::BindOnce(&Tab::MaybeEndHoldAfterLoad,
+                                          base::Unretained(this)));
+  }
 }
 
 void Tab::RunJavaScriptDialog(content::WebContents* web_contents,
