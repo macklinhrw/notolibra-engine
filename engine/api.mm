@@ -8,10 +8,12 @@
 #import <AppKit/AppKit.h>
 #include <objc/runtime.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstring>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "base/apple/foundation_util.h"
 #include "base/check.h"
@@ -40,6 +42,7 @@
 #include "notolibra/engine/browser_context.h"
 #include "notolibra/engine/engine.h"
 #include "notolibra/engine/main_delegate.h"
+#include "notolibra/engine/profile_import.h"
 #include "notolibra/engine/request_filter.h"
 #include "notolibra/engine/tab.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
@@ -50,6 +53,26 @@ namespace {
 
 Engine* g_engine = nullptr;
 ne_profile* g_profile = nullptr;
+
+// Copies an array of the caller's structs, each starting with its size (the
+// array's stride), into ours: fields the caller's version lacks stay zero.
+template <typename T>
+std::vector<T> CopySizedArray(const T* items, size_t count) {
+  std::vector<T> out(count);
+  if (!items || count == 0 || items->size < sizeof(size_t)) {
+    out.clear();
+    return out;
+  }
+  const size_t stride = items->size;
+  const auto* bytes = reinterpret_cast<const uint8_t*>(items);
+  for (size_t i = 0; i < count; ++i) {
+    // SAFETY: the caller passes `count` structs of `stride` bytes each.
+    UNSAFE_BUFFERS(std::memcpy(&out[i], bytes + i * stride,
+                               std::min(stride, sizeof(T))));
+    out[i].size = sizeof(T);
+  }
+  return out;
+}
 
 std::string ToString(ne_string_view view) {
   return view.data ? std::string(view.data, view.length) : std::string();
@@ -657,6 +680,39 @@ NE_EXPORT void ne_profile_set_site_feature(ne_profile* profile,
                                            ne_string_view host,
                                            ne_feature feature,
                                            bool enabled) {}
+
+NE_EXPORT void ne_profile_import_cookies(ne_profile* profile,
+                                         const ne_cookie* cookies,
+                                         size_t count,
+                                         ne_cookie_import_fn done,
+                                         void* user_data) {
+  if (!profile || !profile->context || (count && !cookies)) {
+    if (done) {
+      done(user_data, NE_ERR_INVALID_ARGUMENT, nullptr);
+    }
+    return;
+  }
+  std::vector<ne_cookie> copy = notolibra::CopySizedArray(cookies, count);
+  notolibra::ImportCookies(profile->context, copy.data(), copy.size(), done,
+                           user_data);
+}
+
+NE_EXPORT void ne_profile_import_local_storage(ne_profile* profile,
+                                               const ne_storage_origin* origins,
+                                               size_t count,
+                                               bool overwrite,
+                                               ne_storage_import_fn done,
+                                               void* user_data) {
+  if (!profile || !profile->context || (count && !origins)) {
+    if (done) {
+      done(user_data, NE_ERR_INVALID_ARGUMENT, nullptr);
+    }
+    return;
+  }
+  std::vector<ne_storage_origin> copy = notolibra::CopySizedArray(origins, count);
+  notolibra::ImportLocalStorage(profile->context, copy.data(), copy.size(),
+                                overwrite, done, user_data);
+}
 
 // The helper app's entry point (helper_main.cc): every child process.
 NE_EXPORT int ne_helper_main(int argc, const char** argv) {

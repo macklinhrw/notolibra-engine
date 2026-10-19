@@ -755,6 +755,127 @@ NE_EXPORT void ne_profile_set_site_feature(ne_profile* profile,
                                            ne_string_view host,
                                            ne_feature feature, bool enabled);
 
+/* ------------------------------------------------------------------------ */
+/* Phase 1: importing another browser's data into a profile                  */
+/*                                                                           */
+/* Cookies and local storage go through the profile's own stores (the       */
+/* network service's cookie manager, the storage service's local storage),  */
+/* never their files: the cookie database is encrypted with the profile's   */
+/* key, mock or keychain, and both are open while the engine runs. Each     */
+/* call copies what it's given before returning; the completion comes       */
+/* later, after the stores have flushed to disk. Never logs names, values   */
+/* or hosts.                                                                 */
+
+/* SameSite as the cookie was set (Chromium's net::CookieSameSite). */
+typedef enum ne_cookie_same_site {
+  NE_COOKIE_SAME_SITE_UNSPECIFIED = 0, /* no attribute: treated as Lax */
+  NE_COOKIE_SAME_SITE_NONE = 1,        /* requires `secure` */
+  NE_COOKIE_SAME_SITE_LAX = 2,
+  NE_COOKIE_SAME_SITE_STRICT = 3,
+} ne_cookie_same_site;
+
+/* The scheme that set the cookie (net::CookieSourceScheme). */
+typedef enum ne_cookie_source_scheme {
+  NE_COOKIE_SCHEME_UNSET = 0,
+  NE_COOKIE_SCHEME_NON_SECURE = 1,
+  NE_COOKIE_SCHEME_SECURE = 2,
+} ne_cookie_source_scheme;
+
+typedef struct ne_cookie {
+  size_t size;
+  ne_string_view name;
+  ne_string_view value;
+  /* A leading dot makes a domain cookie (sent to subdomains too); without
+   * one the cookie is host-only. */
+  ne_string_view domain;
+  ne_string_view path;                /* empty: "/" */
+  /* Microseconds since the Unix epoch; 0: unknown (now). */
+  int64_t creation_us;
+  int64_t expiry_us;                  /* 0: a session cookie */
+  int64_t last_access_us;
+  int64_t last_update_us;             /* when its value was last set */
+  bool secure;
+  bool http_only;
+  int32_t same_site;                  /* ne_cookie_same_site */
+  int32_t source_scheme;              /* ne_cookie_source_scheme */
+  /* A partitioned (CHIPS) cookie's top-level site, "https://example.com";
+   * empty: not partitioned. Partitioned cookies must be secure. */
+  ne_string_view partition_site;
+  /* The partition's frame had a cross-site ancestor other than the
+   * cookie's own site (Firefox's "f"); the engine works out the rest. */
+  bool partition_cross_site_ancestor;
+} ne_cookie;
+
+typedef struct ne_cookie_import_result {
+  size_t size;
+  uint64_t added;                     /* new to the profile */
+  uint64_t updated;                   /* replaced a different cookie of the same name, domain and path */
+  uint64_t unchanged;                 /* the profile had it already */
+  uint64_t kept_newer;                /* the profile's was set more recently: left alone */
+  uint64_t expired;                   /* expired before it could be imported */
+  uint64_t invalid;                   /* not a valid cookie (name, value, domain, prefix) */
+  uint64_t refused;                   /* the cookie store refused it */
+} ne_cookie_import_result;
+
+typedef void (*ne_cookie_import_fn)(void* user_data, ne_status status,
+                                    const ne_cookie_import_result* result);
+
+/* Writes `cookies` into the profile's cookie store as a browser would have
+ * stored them (HttpOnly and every SameSite context allowed), then flushes
+ * the store and calls `done`. Importing the same cookies again changes
+ * nothing; a cookie the profile set more recently (last_update_us) is kept.
+ * Expiry is capped at 400 days from now, as Chromium caps new cookies. */
+NE_EXPORT void ne_profile_import_cookies(ne_profile* profile,
+                                         const ne_cookie* cookies,
+                                         size_t count,
+                                         ne_cookie_import_fn done,
+                                         void* user_data);
+
+/* A DOMString as JavaScript sees it: UTF-16 code units, unpaired
+ * surrogates and all. */
+typedef struct ne_utf16_view {
+  const uint16_t* data;
+  size_t length;
+} ne_utf16_view;
+
+typedef struct ne_storage_item {
+  ne_utf16_view key;
+  ne_utf16_view value;
+} ne_storage_item;
+
+/* One origin's local storage. */
+typedef struct ne_storage_origin {
+  size_t size;
+  ne_string_view origin;              /* "https://example.com[:port]" */
+  const ne_storage_item* items;
+  size_t item_count;
+} ne_storage_origin;
+
+typedef struct ne_storage_import_result {
+  size_t size;
+  uint64_t origins;                   /* origins written to */
+  uint64_t added;                     /* keys new to the origin */
+  uint64_t updated;                   /* keys whose value was replaced */
+  uint64_t unchanged;                 /* keys the origin had with the same value */
+  uint64_t kept;                      /* keys with another value here, left alone (!overwrite) */
+  uint64_t refused;                   /* refused by the store (over its quota) */
+  uint64_t invalid_origins;           /* not a web origin; their items are left out */
+} ne_storage_import_result;
+
+typedef void (*ne_storage_import_fn)(void* user_data, ne_status status,
+                                     const ne_storage_import_result* result);
+
+/* Writes items into the profile's local storage, per origin (first-party
+ * storage keys), then flushes it and calls `done`. With `overwrite`, an
+ * item whose key the origin already has replaces its value; without, the
+ * profile's value is kept. Pages open on the origin see the change as a
+ * storage event. */
+NE_EXPORT void ne_profile_import_local_storage(ne_profile* profile,
+                                               const ne_storage_origin* origins,
+                                               size_t count, bool overwrite,
+                                               ne_storage_import_fn done,
+                                               void* user_data);
+
 #ifdef __cplusplus
 }  /* extern "C" */
 #endif

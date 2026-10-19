@@ -131,8 +131,13 @@ void BrowserClient::ConfigureNetworkContextParams(
       base::FilePath(FILE_PATH_LITERAL("SCT Auditing Pending Reports"));
   paths->http_cache_directory = base.Append(FILE_PATH_LITERAL("Cache"));
   network_context_params->file_paths = std::move(paths);
-  // Session cookies survive a restart, as the CEF pane's did.
+  // Session cookies survive a restart, as the CEF pane's did (Chrome's
+  // "Continue where you left off"): written to the database, and restored
+  // from it at the next start. Without `restore_old_session_cookies`
+  // Chromium writes them but deletes them as it loads the database, which
+  // the engine did until October 19, 2026.
   network_context_params->persist_session_cookies = true;
+  network_context_params->restore_old_session_cookies = true;
   network_context_params->enable_encrypted_cookies = true;
   if (main_parts_ && main_parts_->cookie_encryption()) {
     network_context_params->cookie_encryption_provider =

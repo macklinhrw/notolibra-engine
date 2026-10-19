@@ -11,7 +11,7 @@ app repository; section numbers below refer to it. Private; proprietary.
 | --- | --- |
 | `CHROMIUM_VERSION` | The Chromium tag we build (§5.5: Extended Stable). |
 | `api/ne_engine.h` | The C embedding API (§2.2). |
-| `engine/` | NotolibraEngine.framework (on `//content`): the API's implementation (`api.mm`), a main delegate for every process, browser client and profile (`browser_client`, `browser_context`: permissions, session SSL state, downloads, persistent storage, cookies encrypted in our own keychain item), `Tab` (`tab.mm`, `tab_ui.mm`: frames as IOSurfaces, the compositor's own output (below), input, dialogs, file choosers, context menus, new windows, favicons as UI requests), `view_bridge` (RenderWidgetHostViewMac's NSView calls as data: cursors, `<select>`, tooltips, IME), `request_filter` (the app's content filter in front of every page's URLLoaderFactory, on the IO thread), `system_drag` (page drags become system drags only from a window someone can see, below), `pdf` (PDF responses commit an engine-made document and their bytes are saved for the app, below), `frame_agent.mojom` and `renderer/` (document-start scripts run as each frame's main-world context is created; error pages the browser sends with the commit), paint holding across navigations and the app's surface colour (below), `download_delegate`, the sandboxed helper app, and the framework's own .pak. |
+| `engine/` | NotolibraEngine.framework (on `//content`): the API's implementation (`api.mm`), a main delegate for every process, browser client and profile (`browser_client`, `browser_context`: permissions, session SSL state, downloads, persistent storage, cookies encrypted in our own keychain item), `Tab` (`tab.mm`, `tab_ui.mm`: frames as IOSurfaces, the compositor's own output (below), input, dialogs, file choosers, context menus, new windows, favicons as UI requests), `view_bridge` (RenderWidgetHostViewMac's NSView calls as data: cursors, `<select>`, tooltips, IME), `request_filter` (the app's content filter in front of every page's URLLoaderFactory, on the IO thread), `system_drag` (page drags become system drags only from a window someone can see, below), `pdf` (PDF responses commit an engine-made document and their bytes are saved for the app, below), `frame_agent.mojom` and `renderer/` (document-start scripts run as each frame's main-world context is created; error pages the browser sends with the commit), paint holding across navigations and the app's surface colour (below), `profile_import` (another browser's cookies and local storage written through the profile's own stores, below), `download_delegate`, the sandboxed helper app, and the framework's own .pak. |
 | `proto/` | The Phase 0 gpui host: a standalone cargo project that shows a tab in a GPUI Fast composition surface and runs the Phase 0 checks hidden (`proto/run_checks`). |
 | `test/engine/` | `run_smoke`: the engine from a plain AppKit host, hidden. |
 | `build/args/` | GN args: `common.gn` (§3.2, §5.1), `dev.gn`, `release_test.gn`, `official.gn`, and `clt.gn` for building without Xcode. |
@@ -226,6 +226,51 @@ between a page's `<script>` elements). To an older engine the separator is
 a comment, and the parts run as one script. Until October 19, 2026 they
 always ran as one: Dark Reader's part ended in an unterminated call, so a
 part after it was parsed as a call of its result and threw.
+
+## Importing cookies and local storage
+
+October 19, 2026, so Macklin's Zen sign-ins carry over (the app's
+`browser_data` reads Zen's files; native/README.md → Browser data).
+`ne_profile_import_cookies` and `ne_profile_import_local_storage`
+(`engine/profile_import.cc`) write another browser's data through the
+profile's own stores, never their files: Chromium's `Cookies` database is
+encrypted with the profile's key (the mock keychain in unsigned builds, the
+engine's keychain item in signed ones), and both stores are open while the
+engine runs. Counts only are logged.
+
+- **Cookies:** each becomes a `CanonicalCookie` (`FromStorage`, so its
+  creation, last-access and last-update times, SameSite, source scheme and
+  CHIPS partition are kept) and goes to the network service's
+  `CookieManager::SetCanonicalCookie` with HttpOnly allowed and an
+  inclusive SameSite context, from `https://<host><path>` (`http` when only
+  http ever set a non-secure cookie). Expiry is capped at 400 days from now;
+  a cookie whose lifetime from its creation would still exceed Chromium's
+  400-day check gets a later creation date (Chromium itself checks a
+  replacement against the time it's set and keeps the old creation date,
+  which it can't be told from outside). `GetAllCookies` first makes the call
+  idempotent: a cookie the profile has with the same value and attributes is
+  unchanged; one the profile set more recently (`LastUpdateDate`) is kept;
+  anything else is set. A partition's ancestor bit is cross-site unless the
+  cookie's site is the top-level site and the source recorded no cross-site
+  ancestor. `FlushCookieStore` runs before the completion.
+- **Local storage:** per origin, one at a time, the storage partition's
+  `LocalStorageControl` binds the first-party `StorageArea`; `GetAll` reads
+  what's there, and `Put` writes each item in Blink's format
+  (`CachedStorageArea::StringToUint8Vector`: a 1 and Latin-1 bytes, or a 0
+  and UTF-16 code units), so pages read the values exactly, unpaired
+  surrogates included. The app passes UTF-16 for that reason. Then `Flush`,
+  and `GetUsage` as a barrier before the completion.
+- **Session cookies now survive a restart.** The network context had
+  `persist_session_cookies` but not `restore_old_session_cookies`, so
+  Chromium wrote session cookies to the database and deleted them as it
+  loaded it at the next start: every session-cookie sign-in was lost on
+  quit, though this README and the app's said otherwise. Both are set now,
+  as Chrome's "Continue where you left off" does.
+- **Check:** the app's `NOTOLIBRA_COOKIE_IMPORT_TEST` (hidden; a synthetic
+  Zen profile and a local `*.localhost` site): `document.cookie`, request
+  `Cookie` headers (HttpOnly cookies in requests only), a path cookie,
+  local storage values, importing again changing nothing, and all of it
+  again in a new process on the same profile.
 
 ## Licences
 
