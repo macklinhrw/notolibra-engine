@@ -39,6 +39,7 @@
 #include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
 #include "third_party/blink/public/mojom/frame/find_in_page.mojom.h"
+#include "ui/base/cocoa/remote_layer_api.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect.h"
@@ -149,7 +150,9 @@ Tab::~Tab() {
   }
   capturer_.reset();
   for (auto& [id, frame] : held_frames_) {
-    frame.callbacks->Done();
+    if (frame.callbacks) {
+      frame.callbacks->Done();
+    }
   }
   held_frames_.clear();
   capture_handle_.RunAndReset();
@@ -296,6 +299,7 @@ void Tab::SetPresenter(const ne_presenter* presenter) {
     if (capturer_) {
       capturer_->RequestRefreshFrame();
     }
+    PresentCompositorFrame(base::TimeTicks::Now());
   } else {
     has_presenter_ = false;
     presenter_ = {};
@@ -326,9 +330,63 @@ void Tab::ApplySize() {
   }
 }
 
+// static
+bool Tab::FramesFromCompositor() {
+  return !ui::RemoteLayerAPISupported();
+}
+
+void Tab::OnCompositorFrame(const gfx::CALayerParams& params) {
+  base::apple::ScopedCFTypeRef<IOSurfaceRef> surface(
+      IOSurfaceLookupFromMachPort(params.io_surface_mach_port.get()));
+  if (!surface) {
+    return;
+  }
+  last_output_ = std::move(surface);
+  last_output_size_ = params.pixel_size;
+  last_output_scale_ = params.scale_factor;
+  PresentCompositorFrame(base::TimeTicks::Now());
+}
+
+void Tab::PresentCompositorFrame(base::TimeTicks produced) {
+  if (!last_output_ || !has_presenter_ || !presenter_.on_frame) {
+    return;
+  }
+  // The display's whole output; its buffer may be larger than the frame.
+  const gfx::Size surface_size(
+      static_cast<int>(IOSurfaceGetWidth(last_output_.get())),
+      static_cast<int>(IOSurfaceGetHeight(last_output_.get())));
+  gfx::Rect content(last_output_size_);
+  content.Intersect(gfx::Rect(surface_size));
+  HeldFrame frame;
+  frame.surface = last_output_;
+  Deliver(std::move(frame), content, last_output_scale_, produced);
+}
+
+void Tab::Deliver(HeldFrame frame,
+                  const gfx::Rect& content_rect,
+                  float scale_factor,
+                  base::TimeTicks produced) {
+  IOSurfaceRef surface = frame.surface.get();
+  const uint64_t id = next_frame_id_++;
+  ne_frame out = {sizeof(ne_frame)};
+  out.frame_id = id;
+  out.kind = NE_SURFACE_IOSURFACE;
+  out.surface = surface;
+  out.pixel_width = static_cast<int32_t>(IOSurfaceGetWidth(surface));
+  out.pixel_height = static_cast<int32_t>(IOSurfaceGetHeight(surface));
+  out.scale_factor = scale_factor;
+  out.content_rect = {static_cast<double>(content_rect.x()),
+                      static_cast<double>(content_rect.y()),
+                      static_cast<double>(content_rect.width()),
+                      static_cast<double>(content_rect.height())};
+  out.capture_time_us = (produced - base::TimeTicks()).InMicroseconds();
+  held_frames_.emplace(id, std::move(frame));
+  presenter_.on_frame(presenter_.user_data, &out);
+}
+
 void Tab::EnsureCapture() {
   content::RenderWidgetHostView* rwhv = view();
-  if (!rwhv || !has_presenter_) {
+  if (!rwhv || !has_presenter_ || FramesFromCompositor()) {
     return;
   }
   if (rwhv == captured_view_ && capturer_) {
@@ -372,22 +430,12 @@ void Tab::OnFrameCaptured(
     return;
   }
   frame.surface.reset(surface, base::scoped_policy::RETAIN);
-
-  const uint64_t id = next_frame_id_++;
-  ne_frame out = {sizeof(ne_frame)};
-  out.frame_id = id;
-  out.kind = NE_SURFACE_IOSURFACE;
-  out.surface = surface;
-  out.pixel_width = info->coded_size.width();
-  out.pixel_height = info->coded_size.height();
-  out.scale_factor = view() ? view()->GetDeviceScaleFactor() : scale_factor_;
-  out.content_rect = {static_cast<double>(content_rect.x()),
-                      static_cast<double>(content_rect.y()),
-                      static_cast<double>(content_rect.width()),
-                      static_cast<double>(content_rect.height())};
-  out.capture_time_us = info->timestamp.InMicroseconds();
-  held_frames_.emplace(id, std::move(frame));
-  presenter_.on_frame(presenter_.user_data, &out);
+  // When the capturer saw the display draw the frame (it copies it in the
+  // display's next pass).
+  const base::TimeTicks produced =
+      info->metadata.capture_begin_time.value_or(base::TimeTicks::Now());
+  Deliver(std::move(frame), content_rect,
+          view() ? view()->GetDeviceScaleFactor() : scale_factor_, produced);
 }
 
 void Tab::ReleaseFrame(uint64_t frame_id) {
@@ -395,7 +443,9 @@ void Tab::ReleaseFrame(uint64_t frame_id) {
   if (it == held_frames_.end()) {
     return;
   }
-  it->second.callbacks->Done();
+  if (it->second.callbacks) {
+    it->second.callbacks->Done();
+  }
   held_frames_.erase(it);
 }
 

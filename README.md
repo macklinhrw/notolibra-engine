@@ -11,7 +11,7 @@ app repository; section numbers below refer to it. Private; proprietary.
 | --- | --- |
 | `CHROMIUM_VERSION` | The Chromium tag we build (§5.5: Extended Stable). |
 | `api/ne_engine.h` | The C embedding API (§2.2). |
-| `engine/` | NotolibraEngine.framework (on `//content`): the API's implementation (`api.mm`), a main delegate for every process, browser client and profile (`browser_client`, `browser_context`: permissions, session SSL state, downloads, persistent storage, cookies encrypted in our own keychain item), `Tab` (`tab.mm`, `tab_ui.mm`: frames as IOSurfaces from Viz's capturer, input, dialogs, file choosers, context menus, new windows, favicons as UI requests), `view_bridge` (RenderWidgetHostViewMac's NSView calls as data: cursors, `<select>`, tooltips, IME), `request_filter` (the app's content filter in front of every page's URLLoaderFactory, on the IO thread), `frame_agent.mojom` and `renderer/` (document-start scripts run as each frame's main-world context is created), `download_delegate`, the sandboxed helper app, and the framework's own .pak. |
+| `engine/` | NotolibraEngine.framework (on `//content`): the API's implementation (`api.mm`), a main delegate for every process, browser client and profile (`browser_client`, `browser_context`: permissions, session SSL state, downloads, persistent storage, cookies encrypted in our own keychain item), `Tab` (`tab.mm`, `tab_ui.mm`: frames as IOSurfaces, the compositor's own output (below), input, dialogs, file choosers, context menus, new windows, favicons as UI requests), `view_bridge` (RenderWidgetHostViewMac's NSView calls as data: cursors, `<select>`, tooltips, IME), `request_filter` (the app's content filter in front of every page's URLLoaderFactory, on the IO thread), `frame_agent.mojom` and `renderer/` (document-start scripts run as each frame's main-world context is created), `download_delegate`, the sandboxed helper app, and the framework's own .pak. |
 | `proto/` | The Phase 0 gpui host: a standalone cargo project that shows a tab in a GPUI Fast composition surface and runs the Phase 0 checks hidden (`proto/run_checks`). |
 | `test/engine/` | `run_smoke`: the engine from a plain AppKit host, hidden. |
 | `build/args/` | GN args: `common.gn` (§3.2, §5.1), `dev.gn`, `release_test.gn`, `official.gn`, and `clt.gn` for building without Xcode. |
@@ -66,10 +66,25 @@ Current series:
 | `macos-attach-mode` | 7 files in `base/` | The browser's UI thread attaches to a host's running `-[NSApplication run]` (iOS's attach mode, ported; §2.4). |
 | `embedder-run-loop` | `content_main.h`, `content_main.cc` | `ContentMainParams::embedder_owns_run_loop`: content starts without running or shutting down the loop. |
 | `chromium-src` (disabled) | `build/config/BUILDCONFIG.gn` | Turns on `chromium_src` overrides. |
-| `embedder-ns-view` | `render_widget_host_view_mac.{h,mm}`, `content/browser/BUILD.gn` | `RenderWidgetHostViewMac::SetEmbedderNSView`: the engine's view bridge takes the NSView's calls (cursors, `<select>`, IME state as data); `for_content_tests` visible to `//notolibra/*`. |
+| `embedder-ns-view` | `render_widget_host_view_mac.{h,mm}`, `content/browser/BUILD.gn` | `RenderWidgetHostViewMac::SetEmbedderNSView`: the engine's view bridge takes the NSView's calls (cursors, `<select>`, IME state as data, and the compositor's frames, its last one handed over when the bridge is attached); `for_content_tests` visible to `//notolibra/*`. |
 | `embedder-keychain` | `components/os_crypt/common/BUILD.gn` | `ALLOW_RUNTIME_CONFIGURABLE_KEY_STORAGE`, so the engine names its own Safe Storage keychain item. |
 | `embedder-sandbox-path` | `content/browser/sandbox_parameters_mac.mm` | When the framework is outside the host app's bundle, the Seatbelt profile's bundle path is the framework's folder. |
 | `nonbundled-ffmpeg-rpath` | `build/config/mac/BUILD.gn` | FFmpeg is a shared library in every build, so non-component builds (`release_test`) give binaries the component build's rpaths; build tools such as `v8_context_snapshot_generator` load it. |
+| `embedder-compositor-frames` | `skia_output_device_buffer_queue.cc` | Without remote Core Animation, macOS gets five root buffers instead of three (pending swaps stay at two): the app shows each buffer itself, so it can fall three frames behind before one it shows is drawn into again. |
+
+## Frames
+
+Pages are shown from their compositor's own output (October 18, 2026, for
+hover latency; native/README.md, Browser engine). The engine turns off remote
+Core Animation (`RemoteCoreAnimationAPI`) and renders in sRGB
+(`--force-color-profile=srgb`), so the GPU process hands each display frame
+to the browser as one IOSurface through `SetCALayerParams`, which the view
+bridge passes to `Tab::OnCompositorFrame` and the app shows with no copy.
+Viz's capturer, used until then, saw a frame only as the display drew it and
+copied it in the display's next pass: a second draw and a GPU copy per frame,
+and the frame a pass later. `--notolibra-frame-source=capture` brings the
+capturer back for comparison. `ne_frame.capture_time_us` is when the engine
+had the frame (`base::TimeTicks` microseconds), so hosts can time the stages.
 
 ## Licences
 

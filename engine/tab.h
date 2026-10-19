@@ -21,6 +21,7 @@
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "components/viz/host/client_frame_sink_video_capturer.h"
 #include "content/public/browser/context_menu_params.h"
@@ -34,6 +35,7 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "ne_engine.h"
 #include "services/viz/privileged/mojom/compositing/frame_sink_video_capture.mojom.h"
+#include "ui/gfx/ca_layer_params.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/range/range.h"
@@ -199,6 +201,11 @@ class Tab : public content::WebContentsDelegate,
   void CancelDialogs(content::WebContents* web_contents,
                      bool reset_state) override;
 
+  // A frame of the page's compositor output from its view bridge: with
+  // remote Core Animation off, one IOSurface per display frame, shown by the
+  // app with no copy as soon as the GPU process has drawn it.
+  void OnCompositorFrame(const gfx::CALayerParams& params);
+
   // viz::mojom::FrameSinkVideoConsumer:
   void OnFrameCaptured(
       media::mojom::VideoBufferHandlePtr data,
@@ -215,8 +222,19 @@ class Tab : public content::WebContentsDelegate,
  private:
   struct HeldFrame {
     base::apple::ScopedCFTypeRef<IOSurfaceRef> surface;
+    // Bound for the capturer's frames, which go back to its pool.
     mojo::Remote<viz::mojom::FrameSinkVideoConsumerFrameCallbacks> callbacks;
   };
+
+  // Whether frames come from the compositor's output (remote Core
+  // Animation off) rather than Viz's capturer.
+  static bool FramesFromCompositor();
+  // Hands the app the compositor's last frame again (a new presenter).
+  void PresentCompositorFrame(base::TimeTicks produced);
+  void Deliver(HeldFrame frame,
+               const gfx::Rect& content_rect,
+               float scale_factor,
+               base::TimeTicks produced);
 
   // (Re)starts capture if the page's view changed (cross-process navigations
   // swap it) and a presenter is set.
@@ -256,6 +274,10 @@ class Tab : public content::WebContentsDelegate,
   base::ScopedClosureRunner capture_handle_;
   uint64_t next_frame_id_ = 1;
   std::map<uint64_t, HeldFrame> held_frames_;
+  // The compositor's last frame, for a presenter set later.
+  base::apple::ScopedCFTypeRef<IOSurfaceRef> last_output_;
+  gfx::Size last_output_size_;
+  float last_output_scale_ = 2.f;
   bool logged_unexpected_buffer_ = false;
   // One bridge per page view still alive (pages in the back-forward cache
   // keep theirs), by widget.

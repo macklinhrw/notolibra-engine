@@ -193,7 +193,21 @@ void ViewBridge::SetBounds(const gfx::Rect& rect) {
 }
 
 void ViewBridge::SetCALayerParams(gfx::CALayerParams ca_layer_params) {
-  next_->SetCALayerParams(std::move(ca_layer_params));
+  // With remote Core Animation off (the engine's default), each display
+  // frame arrives as one IOSurface: the app shows it, so the in-process
+  // NSView, never on screen, isn't given it. A page in the back-forward
+  // cache shows nothing.
+  if (ca_layer_params.io_surface_mach_port) {
+    if (IsCurrent()) {
+      tab_->OnCompositorFrame(ca_layer_params);
+    }
+    return;
+  }
+  // Null while the view hands its last frame to a new bridge (the in-process
+  // view has that one already).
+  if (next_) {
+    next_->SetCALayerParams(std::move(ca_layer_params));
+  }
 }
 
 void ViewBridge::SetBackgroundColor(uint32_t color) {

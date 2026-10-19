@@ -1,0 +1,33 @@
+Pages are shown from the compositor's own output: with remote Core Animation off, the browser (the engine's app) shows each root buffer itself, a frame or more after it is drawn. Five buffers instead of three let it fall three frames behind before a buffer it shows is drawn into again; pending swaps stay at two.
+
+diff --git a/components/viz/service/display_embedder/skia_output_device_buffer_queue.cc b/components/viz/service/display_embedder/skia_output_device_buffer_queue.cc
+index 94cb1257dd..060fbbd92d 100644
+--- a/components/viz/service/display_embedder/skia_output_device_buffer_queue.cc
++++ b/components/viz/service/display_embedder/skia_output_device_buffer_queue.cc
+@@ -36,6 +36,10 @@
+ #include "ui/gl/gl_fence.h"
+ #include "ui/gl/gl_surface.h"
+ 
++#if BUILDFLAG(IS_MAC)
++#include "ui/base/cocoa/remote_layer_api.h"
++#endif
++
+ #if BUILDFLAG(IS_OZONE)
+ #include "ui/ozone/public/ozone_platform.h"
+ #endif  // BUILDFLAG(IS_OZONE)
+@@ -184,6 +188,15 @@ SkiaOutputDeviceBufferQueue::SkiaOutputDeviceBufferQueue(
+     capabilities_.number_of_buffers = 2;
+   capabilities_.pending_swap_params.max_pending_swaps =
+       capabilities_.number_of_buffers - 1;
++#if BUILDFLAG(IS_MAC)
++  // Notolibra: without remote Core Animation the embedder shows each buffer
++  // itself, a frame or more after it's drawn. Two more buffers let it fall
++  // three frames behind before one it shows is drawn into again; pending
++  // swaps stay at two, so no frame waits longer.
++  if (!ui::RemoteLayerAPISupported()) {
++    capabilities_.number_of_buffers = 5;
++  }
++#endif
+ #if BUILDFLAG(IS_ANDROID)
+   if (::features::IncreaseBufferCountForHighFrameRate() &&
+       capabilities_.number_of_buffers == 5) {

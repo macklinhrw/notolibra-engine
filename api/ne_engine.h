@@ -248,6 +248,8 @@ typedef struct ne_frame {
   int32_t pixel_width, pixel_height;
   double scale_factor;
   ne_rect content_rect;               /* the part of the surface with content */
+  /* When the engine's compositor produced the frame: base::TimeTicks in
+   * microseconds (mach_absolute_time() in microseconds on macOS). */
   int64_t capture_time_us;
 } ne_frame;
 
@@ -255,8 +257,10 @@ typedef struct ne_presenter {
   size_t size;
   void* user_data;
   /* A new frame. The engine keeps the buffer until ne_tab_release_frame(),
-   * so the app can present it without a CPU copy, and freezing a pane is
-   * simply not releasing (plan.md §4.6). */
+   * so the app can present it without a CPU copy. On macOS the buffer is
+   * the page compositor's own output (sRGB), which it draws into again
+   * once the page has drawn four newer frames: hold at most the newest few,
+   * and copy what must outlast that (a frozen pane's picture). */
   void (*on_frame)(void* user_data, const ne_frame* frame);
   /* First visually non-empty paint, and the page's background colour. */
   void (*on_first_paint)(void* user_data, uint32_t background_color_argb);

@@ -6,6 +6,7 @@
 
 #include "base/apple/bundle_locations.h"
 #include "base/apple/foundation_util.h"
+#include "base/base_switches.h"
 #include "base/check.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
@@ -21,6 +22,7 @@
 #include "notolibra/engine/renderer/renderer_client.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/display/display_switches.h"
 
 namespace notolibra {
 
@@ -89,6 +91,28 @@ MainDelegate::~MainDelegate() = default;
 
 std::optional<int> MainDelegate::BasicStartupComplete() {
   SetUpBundlePaths();
+  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+  // Pages are shown from their compositor's own output (Tab::
+  // OnCompositorFrame): with remote Core Animation off, the GPU process
+  // hands each frame to the browser as one IOSurface, as soon as it's
+  // drawn. Viz's capturer, the other source, copies each frame in a second
+  // display pass (`--notolibra-frame-source=capture` keeps it, for
+  // comparison). The browser process decides; children get its features.
+  if (!command_line->HasSwitch(switches::kProcessType) &&
+      command_line->GetSwitchValueASCII(kFrameSourceSwitch) != "capture") {
+    std::string disabled =
+        command_line->GetSwitchValueASCII(switches::kDisableFeatures);
+    disabled += std::string(disabled.empty() ? "" : ",") +
+                "RemoteCoreAnimationAPI";
+    command_line->AppendSwitchASCII(switches::kDisableFeatures, disabled);
+    // The display's output would be in its own colour space (Display P3 on
+    // Apple's screens); the app reads frames as sRGB, as the capturer gave
+    // them (pane snapshots, background samples).
+    if (!command_line->HasSwitch(switches::kForceDisplayColorProfile)) {
+      command_line->AppendSwitchASCII(switches::kForceDisplayColorProfile,
+                                      "srgb");
+    }
+  }
   return std::nullopt;
 }
 

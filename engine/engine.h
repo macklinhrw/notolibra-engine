@@ -23,6 +23,10 @@ class ContentMainRunner;
 
 namespace notolibra {
 
+// `--notolibra-frame-source=capture` takes page frames from Viz's capturer
+// instead of the compositor's own output (MainDelegate::BasicStartupComplete).
+inline constexpr char kFrameSourceSwitch[] = "notolibra-frame-source";
+
 class BrowserContext;
 class MainDelegate;
 class Tab;

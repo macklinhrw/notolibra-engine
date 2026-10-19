@@ -5,10 +5,10 @@ NSView. RenderWidgetHostViewMac::SetEmbedderNSView sets ns_view_, the
 pointer Chromium already uses for remote (app shim) NSViews. No upstream bug.
 
 diff --git a/content/browser/renderer_host/render_widget_host_view_mac.h b/content/browser/renderer_host/render_widget_host_view_mac.h
-index 2126c6c61e..0fe80e235e 100644
+index 2126c6c61e..72ddf28711 100644
 --- a/content/browser/renderer_host/render_widget_host_view_mac.h
 +++ b/content/browser/renderer_host/render_widget_host_view_mac.h
-@@ -122,6 +122,13 @@ class CONTENT_EXPORT RenderWidgetHostViewMac
+@@ -122,6 +122,15 @@ class CONTENT_EXPORT RenderWidgetHostViewMac
      return ns_view_;
    }
  
@@ -16,6 +16,8 @@ index 2126c6c61e..0fe80e235e 100644
 +  // |view| in place of the in-process NSView's bridge (or back to it when
 +  // null), and returns that bridge, for the calls |view| passes on. |view|
 +  // must outlive its use here (until it is unset or this view shuts down).
++  // |view| is given the compositor's last frame (SetCALayerParams) before
++  // this returns.
 +  remote_cocoa::mojom::RenderWidgetHostNSView* SetEmbedderNSView(
 +      remote_cocoa::mojom::RenderWidgetHostNSView* view);
 +
