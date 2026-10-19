@@ -47,6 +47,8 @@ source_set("engine_sources") {
     "download_delegate.h",
     "request_filter.cc",
     "request_filter.h",
+    "system_drag.h",
+    "system_drag.mm",
     "renderer/frame_agent.cc",
     "renderer/frame_agent.h",
     "renderer/renderer_client.cc",

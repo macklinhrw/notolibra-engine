@@ -103,6 +103,9 @@ class Tab : public content::WebContentsDelegate,
   void ImeCancel();
   bool ImeCaretRect(ne_rect* out_rect);
 
+  // Where the last pointer event was, in the page's view.
+  gfx::PointF last_pointer() const { return last_pointer_; }
+
   // The page's view on screen (the primary main frame's), or null.
   content::RenderWidgetHostView* view();
 
@@ -267,6 +270,7 @@ class Tab : public content::WebContentsDelegate,
   ne_presenter presenter_ = {};
   bool has_presenter_ = false;
   gfx::Size size_{800, 600};
+  gfx::PointF last_pointer_;
   double scale_factor_ = 2.0;
 
   std::unique_ptr<viz::ClientFrameSinkVideoCapturer> capturer_;

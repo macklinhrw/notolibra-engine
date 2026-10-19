@@ -109,6 +109,10 @@ class BrowserClient : public content::ContentBrowserClient {
       bool strict_enforcement,
       base::OnceCallback<void(content::CertificateRequestResultType)> callback)
       override;
+  // Refuses drags that would start a system drag nobody is making (a hidden
+  // run's synthetic one), ending the page's drag (system_drag.h).
+  bool IsDragAllowedByPolicy(const content::ClipboardEndpoint& source,
+                             const content::DropData& drop_data) override;
 
   // The one profile of Phase 0, created in PreMainMessageLoopRun().
   BrowserContext* browser_context();

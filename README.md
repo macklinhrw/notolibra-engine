@@ -11,7 +11,7 @@ app repository; section numbers below refer to it. Private; proprietary.
 | --- | --- |
 | `CHROMIUM_VERSION` | The Chromium tag we build (§5.5: Extended Stable). |
 | `api/ne_engine.h` | The C embedding API (§2.2). |
-| `engine/` | NotolibraEngine.framework (on `//content`): the API's implementation (`api.mm`), a main delegate for every process, browser client and profile (`browser_client`, `browser_context`: permissions, session SSL state, downloads, persistent storage, cookies encrypted in our own keychain item), `Tab` (`tab.mm`, `tab_ui.mm`: frames as IOSurfaces, the compositor's own output (below), input, dialogs, file choosers, context menus, new windows, favicons as UI requests), `view_bridge` (RenderWidgetHostViewMac's NSView calls as data: cursors, `<select>`, tooltips, IME), `request_filter` (the app's content filter in front of every page's URLLoaderFactory, on the IO thread), `frame_agent.mojom` and `renderer/` (document-start scripts run as each frame's main-world context is created), `download_delegate`, the sandboxed helper app, and the framework's own .pak. |
+| `engine/` | NotolibraEngine.framework (on `//content`): the API's implementation (`api.mm`), a main delegate for every process, browser client and profile (`browser_client`, `browser_context`: permissions, session SSL state, downloads, persistent storage, cookies encrypted in our own keychain item), `Tab` (`tab.mm`, `tab_ui.mm`: frames as IOSurfaces, the compositor's own output (below), input, dialogs, file choosers, context menus, new windows, favicons as UI requests), `view_bridge` (RenderWidgetHostViewMac's NSView calls as data: cursors, `<select>`, tooltips, IME), `request_filter` (the app's content filter in front of every page's URLLoaderFactory, on the IO thread), `system_drag` (page drags become system drags only from a window someone can see, below), `frame_agent.mojom` and `renderer/` (document-start scripts run as each frame's main-world context is created), `download_delegate`, the sandboxed helper app, and the framework's own .pak. |
 | `proto/` | The Phase 0 gpui host: a standalone cargo project that shows a tab in a GPUI Fast composition surface and runs the Phase 0 checks hidden (`proto/run_checks`). |
 | `test/engine/` | `run_smoke`: the engine from a plain AppKit host, hidden. |
 | `build/args/` | GN args: `common.gn` (§3.2, §5.1), `dev.gn`, `release_test.gn`, `official.gn`, and `clt.gn` for building without Xcode. |
@@ -103,6 +103,33 @@ the main frame's content lies over a cross-site frame, the browser asks the
 main frame's renderer what is under the pointer, so on a busy page events
 there can arrive a little late, as in Chrome. The app's check:
 `NOTOLIBRA_ENGINE_UI_TEST=1` (native/README.md).
+
+## Drags
+
+A page starts a drag (selected text, a link, an image, a draggable element)
+by asking the browser to start one, and `WebContentsViewMac::StartDragging`
+starts an `NSDraggingSession`, whose image the window server draws on the
+screen. Our pages' views are never in a window, so the image starts at the
+screen's origin, its bottom-left corner. On October 18, 2026 a hidden check's
+synthetic drag over a link drew a page thumbnail there, over Macklin's
+windows, and it stayed for seconds (nobody held the button to end it).
+
+`BrowserClient::IsDragAllowedByPolicy`, the embedder's hook before the
+session starts, refuses unless the left button is really held
+(`NSEvent.pressedMouseButtons`) and the pointer is over one of the app's
+windows that is visible, on a screen, not occluded, not transparent and
+taking mouse events (`engine/system_drag.mm`). Refusing, it sends the source
+widget `DragSourceEndedAt` with no drop operation at the last pointer
+position, as a cancelled drag ends (the page gets `dragend` with
+`dropEffect` "none"), and `WebContentsViewMac` then sends
+`SystemDragEnded`, as it does for drags it can't start. Real drags in a
+visible window go on as before; where their image starts (from the view's
+missing window) hasn't been checked, since a hidden run can't drag for real
+and checks never show a window. The app's
+check: `NOTOLIBRA_ENGINE_UI_TEST=1` drags selected text and a link in the
+hidden window and checks that nothing of the run showed on screen, that the
+page saw both drags start and end cancelled, and that it takes a click
+after (native/README.md, Background verification).
 
 ## Licences
 

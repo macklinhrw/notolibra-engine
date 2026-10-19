@@ -18,6 +18,7 @@
 #include "net/ssl/ssl_info.h"
 #include "notolibra/engine/browser_context.h"
 #include "notolibra/engine/request_filter.h"
+#include "notolibra/engine/system_drag.h"
 #include "notolibra/engine/tab.h"
 #include "services/network/public/cpp/cookie_encryption_provider_impl.h"
 #include "url/origin.h"
@@ -302,6 +303,16 @@ void BrowserClient::WillCreateURLLoaderFactory(
       frame ? content::WebContents::FromRenderFrameHost(frame) : nullptr;
   Tab* tab = contents ? Tab::FromWebContents(contents) : nullptr;
   InstallRequestFilter(factory_builder, tab ? tab->id() : 0);
+}
+
+bool BrowserClient::IsDragAllowedByPolicy(
+    const content::ClipboardEndpoint& source,
+    const content::DropData& drop_data) {
+  if (MayStartSystemDrag()) {
+    return true;
+  }
+  EndRefusedDrag(source);
+  return false;
 }
 
 BrowserContext* BrowserClient::browser_context() {

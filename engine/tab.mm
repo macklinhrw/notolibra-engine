@@ -497,6 +497,10 @@ void Tab::SendInput(const ne_input_event& event) {
   auto* mac_view = static_cast<content::RenderWidgetHostViewMac*>(rwhv);
   const base::TimeTicks now = base::TimeTicks::Now();
   const gfx::PointF position(event.x, event.y);
+  if (event.kind != NE_INPUT_KEY_DOWN && event.kind != NE_INPUT_KEY_UP &&
+      event.kind != NE_INPUT_CHAR) {
+    last_pointer_ = position;
+  }
   switch (event.kind) {
     case NE_INPUT_MOUSE_DOWN:
     case NE_INPUT_MOUSE_UP:
