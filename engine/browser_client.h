@@ -109,6 +109,15 @@ class BrowserClient : public content::ContentBrowserClient {
       bool strict_enforcement,
       base::OnceCallback<void(content::CertificateRequestResultType)> callback)
       override;
+  // PDFs a frame navigates to open in the app (pdf.h).
+  std::vector<std::unique_ptr<blink::URLLoaderThrottle>>
+  CreateURLLoaderThrottles(
+      const network::ResourceRequest& request,
+      content::BrowserContext* browser_context,
+      const base::RepeatingCallback<content::WebContents*()>& wc_getter,
+      content::NavigationUIData* navigation_ui_data,
+      content::FrameTreeNodeId frame_tree_node_id,
+      std::optional<int64_t> navigation_id) override;
   // Refuses drags that would start a system drag nobody is making (a hidden
   // run's synthetic one), ending the page's drag (system_drag.h).
   bool IsDragAllowedByPolicy(const content::ClipboardEndpoint& source,

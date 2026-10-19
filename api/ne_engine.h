@@ -107,6 +107,11 @@ typedef struct ne_app_config {
   ne_string_view keychain_service;    /* our own keychain item (plan.md §4.6) */
   int32_t argc;                       /* extra Chromium switches, may be 0 */
   const char* const* argv;
+  /* Phase 1: where the engine saves the PDFs main-frame navigations open
+   * (ne_ui_delegate.on_pdf), a folder of the app's cache. Empty: PDFs
+   * download like any other file, and frames showing one stay as they
+   * were. (A config without this field is accepted: no PDF handling.) */
+  ne_string_view pdf_directory;
 } ne_app_config;
 
 /* Starts ContentMainRunner and BrowserMainRunner on the main thread. Call from
@@ -557,6 +562,56 @@ typedef enum ne_download_state {
   NE_DOWNLOAD_INTERRUPTED = 3,
 } ne_download_state;
 
+/* Phase 1: on_renderer_gone's reasons (base::TerminationStatus, grouped). */
+typedef enum ne_renderer_gone_reason {
+  NE_RENDERER_CRASHED = 1,            /* a crash or an abnormal exit */
+  NE_RENDERER_KILLED = 2,             /* killed: by the system, or chrome://kill */
+  NE_RENDERER_OUT_OF_MEMORY = 3,
+  NE_RENDERER_LAUNCH_FAILED = 4,
+  NE_RENDERER_OTHER = 5,              /* a normal exit, a failed integrity check */
+} ne_renderer_gone_reason;
+
+/* Phase 1: PDFs (on_pdf). The engine has no PDF viewer of its own. With
+ * ne_app_config.pdf_directory set, a navigation whose response is a PDF
+ * (application/pdf or text/pdf, not marked as an attachment by
+ * Content-Disposition, which still downloads) isn't downloaded: its frame
+ * commits a document the engine makes, at the PDF's address, so it has its
+ * own history entry and back, forward and reload work as for any page.
+ *  - In the main frame that document is empty, in the surface colour, titled
+ *    with the file's name, and kept out of the back-forward cache; the PDF's
+ *    bytes are saved meanwhile into a folder of their own in pdf_directory,
+ *    for the app to show the PDF over the page. Each response is saved
+ *    again (going back to it, or reloading, fetches it again; the HTTP
+ *    cache usually answers).
+ *  - In a subframe (an <iframe>, or an <embed>/<object> loaded as a frame)
+ *    it is a card with the file's name and an "Open PDF" link that opens
+ *    it in the top frame, and nothing is saved.
+ * Events for one PDF share `pdf_id`: STARTED as the response arrives (before
+ * its document commits), PROGRESS now and then while saving (at most every
+ * 100 ms), FINISHED once (complete, interrupted, or cancelled when the tab
+ * leaves the PDF's document or closes before it is saved), and COMMITTED
+ * when the document showing it commits in the main frame, right before that
+ * commit's NE_LOAD_COMMITTED; the app shows the PDF from then until the main
+ * frame commits another document. */
+typedef enum ne_pdf_event_kind {
+  NE_PDF_STARTED = 1,
+  NE_PDF_PROGRESS = 2,
+  NE_PDF_FINISHED = 3,
+  NE_PDF_COMMITTED = 4,
+} ne_pdf_event_kind;
+
+typedef struct ne_pdf_event {
+  size_t size;
+  int32_t kind;                       /* ne_pdf_event_kind */
+  uint64_t pdf_id;                    /* never reused */
+  int32_t state;                      /* ne_download_state */
+  int64_t received_bytes;
+  int64_t total_bytes;                /* -1 if unknown */
+  ne_string_view url;                 /* the PDF's address, after redirects */
+  ne_string_view path;                /* the file it is saved to */
+  ne_string_view file_name;           /* its name (Content-Disposition, else the URL), ending in .pdf */
+} ne_pdf_event;
+
 typedef struct ne_ui_delegate {
   size_t size;
   void* user_data;
@@ -584,6 +639,14 @@ typedef struct ne_ui_delegate {
   /* Phase 1: the page's icon, as PNG bytes (valid during the call). */
   void (*on_favicon)(void* user_data, ne_tab* tab, ne_string_view icon_url,
                      const uint8_t* png, size_t png_size);
+  /* Phase 1: the renderer process of the tab's main frame went away
+   * (ne_renderer_gone_reason): crashed, killed or out of memory. The page
+   * shows nothing new until a navigation or a reload, which starts a new
+   * renderer (the app shows its own "crashed" page meanwhile). Not called
+   * for tabs being closed. */
+  void (*on_renderer_gone)(void* user_data, ne_tab* tab, int32_t reason);
+  /* Phase 1: a PDF the tab's main frame opened (ne_pdf_event; see there). */
+  void (*on_pdf)(void* user_data, ne_tab* tab, const ne_pdf_event* event);
 } ne_ui_delegate;
 
 /* Phase 1: on_load_event's kinds. */
@@ -664,7 +727,11 @@ NE_EXPORT void ne_app_set_request_filter(ne_app* app, ne_request_filter_fn fn,
  * `frame` is -1 for the frames a document creates without navigating
  * (about:blank children), whose script the engine asks for with the
  * parent's. Return a NUL-terminated string valid until the next call, or
- * NULL for none. */
+ * NULL for none. Phase 1: several scripts may be returned, separated by a
+ * line holding only "//" and U+001E (a comment to engines before October 19,
+ * 2026): each runs as a script of its own, in order, so an exception in one
+ * doesn't stop the next; top-level declarations are shared, as between a
+ * page's <script> elements. */
 typedef const char* (*ne_document_start_fn)(void* user_data, ne_tab* tab,
                                             ne_frame_id frame,
                                             ne_string_view frame_url,

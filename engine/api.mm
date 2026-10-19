@@ -208,7 +208,9 @@ NE_EXPORT ne_status ne_app_init(const ne_app_config* config,
   if (!notolibra::OnMainThread()) {
     return NE_ERR_WRONG_THREAD;
   }
-  if (!config || !out_app || config->size < sizeof(ne_app_config)) {
+  // Configs from before pdf_directory was appended are accepted.
+  if (!config || !out_app ||
+      config->size < offsetof(ne_app_config, pdf_directory)) {
     return NE_ERR_INVALID_ARGUMENT;
   }
   if (config->api_version != NE_API_VERSION) {
@@ -230,6 +232,13 @@ NE_EXPORT ne_status ne_app_init(const ne_app_config* config,
     return NE_ERR_FAILED;
   }
   engine.keychain_service = ToString(config->keychain_service);
+  if (config->size >= offsetof(ne_app_config, pdf_directory) +
+                          sizeof(config->pdf_directory)) {
+    const std::string pdf_directory = ToString(config->pdf_directory);
+    if (!pdf_directory.empty()) {
+      engine.pdf_directory = base::FilePath(pdf_directory);
+    }
+  }
 
   // argv[0] is the host's executable. Child processes run in Chromium's
   // macOS sandbox (helper_main.cc); a caller may still pass --no-sandbox.

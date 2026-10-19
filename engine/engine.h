@@ -43,6 +43,10 @@ struct Engine {
   std::unique_ptr<content::ContentMainRunner> content_runner;
   base::FilePath user_data_dir;
   std::string keychain_service;
+  // Where PDFs that main frames open are saved (ne_app_config.pdf_directory);
+  // empty: PDFs download (pdf.h).
+  base::FilePath pdf_directory;
+  uint64_t next_pdf_id = 1;
   // Keeps argv alive for base::CommandLine.
   std::vector<std::string> argv_storage;
   std::vector<const char*> argv;

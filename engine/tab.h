@@ -34,12 +34,15 @@
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "mojo/public/cpp/system/data_pipe.h"
 #include "ne_engine.h"
+#include "services/network/public/mojom/url_loader.mojom.h"
 #include "services/viz/privileged/mojom/compositing/frame_sink_video_capture.mojom.h"
 #include "ui/gfx/ca_layer_params.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/range/range.h"
+#include "url/gurl.h"
 
 namespace content {
 class BrowserContext;
@@ -49,6 +52,7 @@ class WebContents;
 
 namespace notolibra {
 
+class PdfSaver;
 class ViewBridge;
 
 // A replacement range from the API (-1, -1: none).
@@ -106,6 +110,22 @@ class Tab : public content::WebContentsDelegate,
   void ImeFinish();
   void ImeCancel();
   bool ImeCaretRect(ne_rect* out_rect);
+
+  // PDFs (pdf.h, ne_pdf_event). The document the engine commits for a PDF
+  // response: in the main frame, empty but for the file's name; in a
+  // subframe, a card with an "Open PDF" link.
+  std::string PdfDocumentHtml(const std::string& file_name,
+                              const GURL& url,
+                              bool main_frame) const;
+  // A main-frame navigation's PDF response: saves its body (`body`, with
+  // the original loader and client kept alive) and tells the app.
+  void StartPdf(int64_t navigation_id,
+                const GURL& url,
+                const std::string& file_name,
+                int64_t total_bytes,
+                mojo::PendingRemote<network::mojom::URLLoader> loader,
+                mojo::PendingReceiver<network::mojom::URLLoaderClient> client,
+                mojo::ScopedDataPipeConsumerHandle body);
 
   // Where the last pointer event was, in the page's view.
   gfx::PointF last_pointer() const { return last_pointer_; }
@@ -289,6 +309,12 @@ class Tab : public content::WebContentsDelegate,
   std::string ErrorPageHtml(content::NavigationHandle* navigation) const;
   std::string BlankPageScript() const;
 
+  // ne_ui_delegate.on_pdf.
+  void NotifyPdf(const PdfSaver& saver, ne_pdf_event_kind kind);
+  // A main-frame document committed: the PDF it shows (0: none) stays, and
+  // the others' saving stops.
+  void PdfDocumentCommitted(uint64_t shown_pdf);
+
   // Puts a view bridge on the page's view if it has none yet.
   void EnsureViewBridge();
   // Forgets bridges whose view went away while their widget stayed (a
@@ -346,6 +372,18 @@ class Tab : public content::WebContentsDelegate,
   // One bridge per page view still alive (pages in the back-forward cache
   // keep theirs), by widget.
   std::map<content::RenderWidgetHost*, std::unique_ptr<ViewBridge>> bridges_;
+  // PDFs main-frame navigations opened (StartPdf), by id, with their file
+  // names; and which navigation opened each.
+  struct Pdf {
+    Pdf();
+    Pdf(Pdf&&);
+    Pdf& operator=(Pdf&&);
+    ~Pdf();
+    std::unique_ptr<PdfSaver> saver;
+    std::string file_name;
+  };
+  std::map<uint64_t, Pdf> pdfs_;
+  std::map<int64_t, uint64_t> pdf_navigations_;
   // Whether the app consumed the console message the observer saw last; the
   // delegate's DidAddMessageToConsole, called right after, returns it.
   bool console_consumed_ = false;

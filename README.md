@@ -11,7 +11,7 @@ app repository; section numbers below refer to it. Private; proprietary.
 | --- | --- |
 | `CHROMIUM_VERSION` | The Chromium tag we build (§5.5: Extended Stable). |
 | `api/ne_engine.h` | The C embedding API (§2.2). |
-| `engine/` | NotolibraEngine.framework (on `//content`): the API's implementation (`api.mm`), a main delegate for every process, browser client and profile (`browser_client`, `browser_context`: permissions, session SSL state, downloads, persistent storage, cookies encrypted in our own keychain item), `Tab` (`tab.mm`, `tab_ui.mm`: frames as IOSurfaces, the compositor's own output (below), input, dialogs, file choosers, context menus, new windows, favicons as UI requests), `view_bridge` (RenderWidgetHostViewMac's NSView calls as data: cursors, `<select>`, tooltips, IME), `request_filter` (the app's content filter in front of every page's URLLoaderFactory, on the IO thread), `system_drag` (page drags become system drags only from a window someone can see, below), `frame_agent.mojom` and `renderer/` (document-start scripts run as each frame's main-world context is created; error pages the browser sends with the commit), paint holding across navigations and the app's surface colour (below), `download_delegate`, the sandboxed helper app, and the framework's own .pak. |
+| `engine/` | NotolibraEngine.framework (on `//content`): the API's implementation (`api.mm`), a main delegate for every process, browser client and profile (`browser_client`, `browser_context`: permissions, session SSL state, downloads, persistent storage, cookies encrypted in our own keychain item), `Tab` (`tab.mm`, `tab_ui.mm`: frames as IOSurfaces, the compositor's own output (below), input, dialogs, file choosers, context menus, new windows, favicons as UI requests), `view_bridge` (RenderWidgetHostViewMac's NSView calls as data: cursors, `<select>`, tooltips, IME), `request_filter` (the app's content filter in front of every page's URLLoaderFactory, on the IO thread), `system_drag` (page drags become system drags only from a window someone can see, below), `pdf` (PDF responses commit an engine-made document and their bytes are saved for the app, below), `frame_agent.mojom` and `renderer/` (document-start scripts run as each frame's main-world context is created; error pages the browser sends with the commit), paint holding across navigations and the app's surface colour (below), `download_delegate`, the sandboxed helper app, and the framework's own .pak. |
 | `proto/` | The Phase 0 gpui host: a standalone cargo project that shows a tab in a GPUI Fast composition surface and runs the Phase 0 checks hidden (`proto/run_checks`). |
 | `test/engine/` | `run_smoke`: the engine from a plain AppKit host, hidden. |
 | `build/args/` | GN args: `common.gn` (§3.2, §5.1), `dev.gn`, `release_test.gn`, `official.gn`, and `clt.gn` for building without Xcode. |
@@ -177,6 +177,55 @@ check: `NOTOLIBRA_ENGINE_UI_TEST=1` drags selected text and a link in the
 hidden window and checks that nothing of the run showed on screen, that the
 page saw both drags start and end cancelled, and that it takes a click
 after (native/README.md, Background verification).
+
+## PDFs and crashed renderers
+
+The engine has no PDF viewer (Chrome's is an extension and a plugin, neither
+of which `//content` has), so until October 19, 2026 every PDF a page opened
+downloaded, and an `<iframe>` of one did too, silently. Now, when the app
+sets `ne_app_config.pdf_directory`, a navigation throttle
+(`engine/pdf.cc`, from `BrowserClient::CreateURLLoaderThrottles`) looks at
+every frame navigation's response, at the seam Chrome's own viewer uses
+(`PluginResponseInterceptorURLLoaderThrottle`, whose CSP handling it copies):
+
+- a response that is a PDF (`application/pdf`, or `text/pdf`, not sniffed
+  from `text/plain`) and isn't an attachment (`Content-Disposition:
+  attachment` still downloads, `content::download_utils::MustDownload`) gets
+  its body replaced with a small document of the engine's, `text/html` and
+  flagged `intercepted_by_plugin`, so the navigation commits at the PDF's
+  address and has a history entry of its own: back, forward and reload work
+  as for any page;
+- in the main frame that document holds only the file's name, in the surface
+  colour (the app's PDF view covers it), and is kept out of the back-forward
+  cache; the original body (with its loader and client) goes to a `PdfSaver`
+  owned by the `Tab`, which drains it into `<pdf_directory>/<tab>-<pdf>/<name>`
+  on a blocking sequence and reports `ne_ui_delegate.on_pdf`: STARTED,
+  PROGRESS (at most every 100 ms), FINISHED, and COMMITTED right before the
+  commit's `NE_LOAD_COMMITTED`. Another main-frame commit cancels the tab's
+  unfinished saves;
+- in a subframe (`<iframe>`, or an `<embed>`/`<object>` loaded as a frame)
+  it is a card with the file's name and an "Open PDF" link to the top frame;
+  nothing is saved and the request is dropped. The app turns `<embed>` and
+  `<object>` PDFs (which Blink otherwise leaves empty, without a request)
+  into such frames.
+
+A main frame's renderer that crashes, is killed or runs out of memory is
+reported to `ne_ui_delegate.on_renderer_gone` (Chrome's sad-tab statuses;
+not a normal exit, and not for tabs being closed); the app draws its own
+"This page crashed" page with Reload. Discarded tabs (the app closes their
+`ne_tab`) never report it. The app's check: `NOTOLIBRA_WEBPDF_TEST=1`
+(native/README.md, Browser engine → PDFs, downloads and crashed pages).
+
+## Document-start parts
+
+The app's document-start script (`ne_document_start_fn`) may hold several
+parts separated by a line of `//` and U+001E; the renderer
+(`engine/renderer/frame_agent.cc`) runs each as a script of its own, in
+order, so an exception in one doesn't stop the next (globals are shared, as
+between a page's `<script>` elements). To an older engine the separator is
+a comment, and the parts run as one script. Until October 19, 2026 they
+always ran as one: Dark Reader's part ended in an unterminated call, so a
+part after it was parsed as a call of its result and threw.
 
 ## Licences
 

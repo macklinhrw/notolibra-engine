@@ -3,6 +3,7 @@
 #include "notolibra/engine/renderer/frame_agent.h"
 
 #include <map>
+#include <string_view>
 
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
@@ -96,11 +97,23 @@ void FrameAgent::DidCreateScriptContext(v8::Local<v8::Context> context,
 }
 
 void FrameAgent::Run(const std::string& script) {
-  if (script.empty()) {
-    return;
+  // Parts the app separated (ne_document_start_fn) run as scripts of their
+  // own, in order: an exception in one doesn't stop the next, and their
+  // globals are shared, as between a page's <script> elements.
+  static constexpr std::string_view kSeparator = "\n//\x1e\n";
+  std::string_view rest(script);
+  while (!rest.empty()) {
+    const size_t end = rest.find(kSeparator);
+    const std::string_view part = rest.substr(0, end);
+    if (!part.empty()) {
+      render_frame()->GetWebFrame()->ExecuteScript(blink::WebScriptSource(
+          blink::WebString::FromUtf8(part)));
+    }
+    if (end == std::string_view::npos) {
+      break;
+    }
+    rest.remove_prefix(end + kSeparator.size());
   }
-  render_frame()->GetWebFrame()->ExecuteScript(
-      blink::WebScriptSource(blink::WebString::FromUtf8(script)));
 }
 
 void FrameAgent::OnDestruct() {

@@ -17,6 +17,7 @@
 #include "net/base/net_errors.h"
 #include "net/ssl/ssl_info.h"
 #include "notolibra/engine/browser_context.h"
+#include "notolibra/engine/pdf.h"
 #include "notolibra/engine/request_filter.h"
 #include "notolibra/engine/system_drag.h"
 #include "notolibra/engine/tab.h"
@@ -313,6 +314,23 @@ bool BrowserClient::IsDragAllowedByPolicy(
   }
   EndRefusedDrag(source);
   return false;
+}
+
+std::vector<std::unique_ptr<blink::URLLoaderThrottle>>
+BrowserClient::CreateURLLoaderThrottles(
+    const network::ResourceRequest& request,
+    content::BrowserContext* browser_context,
+    const base::RepeatingCallback<content::WebContents*()>& wc_getter,
+    content::NavigationUIData* navigation_ui_data,
+    content::FrameTreeNodeId frame_tree_node_id,
+    std::optional<int64_t> navigation_id) {
+  std::vector<std::unique_ptr<blink::URLLoaderThrottle>> throttles;
+  // PDFs open in the app instead of downloading (pdf.h).
+  if (auto pdf = MaybeCreatePdfThrottle(request, frame_tree_node_id,
+                                        navigation_id)) {
+    throttles.push_back(std::move(pdf));
+  }
+  return throttles;
 }
 
 BrowserContext* BrowserClient::browser_context() {

@@ -19,6 +19,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/input/native_web_keyboard_event.h"
+#include "content/public/browser/back_forward_cache.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/host_zoom_map.h"
 #include "content/public/browser/navigation_controller.h"
@@ -35,6 +36,7 @@
 #include "content/browser/renderer_host/render_widget_host_view_mac.h"
 #include "notolibra/engine/engine.h"
 #include "notolibra/engine/frame_agent.mojom.h"
+#include "notolibra/engine/pdf.h"
 #include "notolibra/engine/view_bridge.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "net/base/net_errors.h"
@@ -1086,7 +1088,11 @@ void Tab::ReadyToCommitNavigation(
         {frame_url.data(), frame_url.size()}, {top.data(), top.size()}, main);
     return script ? std::string(script) : std::string();
   };
-  std::string script = blank_style + ask(id, url, is_main);
+  // The surface style and the app's scripts run as separate parts.
+  std::string script = ask(id, url, is_main);
+  if (!blank_style.empty()) {
+    script = script.empty() ? blank_style : blank_style + "\n//\x1e\n" + script;
+  }
   std::string blank_child = ask(-1, "about:blank", false);
   if (script.empty() && blank_child.empty()) {
     return;
@@ -1111,6 +1117,22 @@ void Tab::DidFinishNavigation(content::NavigationHandle* navigation_handle) {
       !navigation_handle->GetRenderFrameHost() ||
       !navigation_handle->GetRenderFrameHost()->GetPage().IsPrimary()) {
     return;
+  }
+  if (navigation_handle->IsInPrimaryMainFrame()) {
+    // A PDF's document: the app hears it before the commit (it shows the
+    // PDF over it), and it never enters the back-forward cache (going back
+    // to it fetches the PDF again, so the app always has its file).
+    uint64_t shown_pdf = 0;
+    auto opened = pdf_navigations_.find(navigation_handle->GetNavigationId());
+    if (opened != pdf_navigations_.end()) {
+      shown_pdf = opened->second;
+      content::BackForwardCache::DisableForRenderFrameHost(
+          navigation_handle->GetRenderFrameHost(),
+          content::BackForwardCache::DisabledReason(
+              content::BackForwardCache::DisabledSource::kEmbedder, 1,
+              "A PDF shown by the app", "", "pdf"));
+    }
+    PdfDocumentCommitted(shown_pdf);
   }
   NotifyLoadEvent(navigation_handle->GetRenderFrameHost(), NE_LOAD_COMMITTED,
                   navigation_handle->GetURL());
@@ -1214,6 +1236,36 @@ void Tab::PrimaryMainFrameRenderProcessGone(base::TerminationStatus status) {
   // The crashed view goes; a reload gives the widget a new one.
   DropStaleBridges();
   EndHold("renderer gone");
+  // The app shows its crashed page (Chrome's sad tab shows for the same
+  // statuses, SadTab::ShouldShow).
+  int32_t reason = 0;
+  switch (status) {
+    case base::TERMINATION_STATUS_ABNORMAL_TERMINATION:
+    case base::TERMINATION_STATUS_PROCESS_CRASHED:
+      reason = NE_RENDERER_CRASHED;
+      break;
+    case base::TERMINATION_STATUS_PROCESS_WAS_KILLED:
+      reason = NE_RENDERER_KILLED;
+      break;
+    case base::TERMINATION_STATUS_OOM:
+      reason = NE_RENDERER_OUT_OF_MEMORY;
+      break;
+    case base::TERMINATION_STATUS_LAUNCH_FAILED:
+      reason = NE_RENDERER_LAUNCH_FAILED;
+      break;
+    case base::TERMINATION_STATUS_NORMAL_TERMINATION:
+    case base::TERMINATION_STATUS_STILL_RUNNING:
+      break;
+    default:
+      reason = NE_RENDERER_OTHER;
+      break;
+  }
+  VLOG(1) << "renderer gone, status " << static_cast<int>(status);
+  Engine* engine = GetEngine();
+  if (reason && engine->has_ui_delegate && engine->ui_delegate.on_renderer_gone) {
+    engine->ui_delegate.on_renderer_gone(engine->ui_delegate.user_data,
+                                         handle_, reason);
+  }
 }
 
 void Tab::BeginHold(int64_t navigation_id) {
@@ -1349,6 +1401,130 @@ std::string Tab::ErrorPageHtml(content::NavigationHandle* navigation) const {
       dark ? "dark" : "light", host.empty() ? url.c_str() : host.c_str(),
       CssColor(background).c_str(), dark ? "#e6e6e6" : "#1f1f1f", url.c_str(),
       error.c_str());
+}
+
+Tab::Pdf::Pdf() = default;
+Tab::Pdf::Pdf(Pdf&&) = default;
+Tab::Pdf& Tab::Pdf::operator=(Pdf&&) = default;
+Tab::Pdf::~Pdf() = default;
+
+std::string Tab::PdfDocumentHtml(const std::string& file_name,
+                                 const GURL& url,
+                                 bool main_frame) const {
+  const SkColor background = surface_color_ ? surface_color_ : SK_ColorWHITE;
+  const bool dark = color_utils::IsDark(background);
+  const std::string name = base::EscapeForHTML(file_name);
+  // The main frame's is hidden under the app's PDF view; it paints its
+  // name, so its paint holding ends at once. A subframe's links to the PDF
+  // in the top frame, where the app shows it.
+  const std::string body =
+      main_frame
+          ? "<main><svg viewBox=\"0 0 24 24\"><path d=\"M14 2H6a2 2 0 0 "
+            "0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z\"/><path "
+            "d=\"M14 2v6h6\"/></svg><p class=\"name\">" +
+                name + "</p><p>PDF document</p></main>"
+          : "<main><svg viewBox=\"0 0 24 24\"><path d=\"M14 2H6a2 2 0 0 "
+            "0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z\"/><path "
+            "d=\"M14 2v6h6\"/></svg><p class=\"name\">" +
+                name +
+                "</p><p>PDF document</p><a target=\"_top\" href=\"" +
+                base::EscapeForHTML(url.spec()) + "\">Open PDF</a></main>";
+  return base::StringPrintf(
+      "<!doctype html><html><head><meta charset=\"utf-8\"><meta "
+      "name=\"color-scheme\" content=\"%s\"><title>%s</title><style>html, "
+      "body { height: 100%%; margin: 0 } html { background: %s; color: %s; "
+      "font: 13px -apple-system, BlinkMacSystemFont, sans-serif } body { "
+      "display: flex; align-items: center; justify-content: center } main { "
+      "display: flex; flex-direction: column; align-items: center; gap: 4px; "
+      "padding: 16px; max-width: 90%%; text-align: center } svg { width: "
+      "28px; height: 28px; fill: none; stroke: currentColor; stroke-width: "
+      "1.5; stroke-linecap: round; stroke-linejoin: round; opacity: .6; "
+      "margin-bottom: 4px } p { margin: 0; opacity: .65 } .name { opacity: 1; "
+      "font-weight: 600; overflow-wrap: anywhere } a { margin-top: 10px; "
+      "padding: 5px 14px; border-radius: 6px; border: 1px solid %s; color: "
+      "inherit; text-decoration: none; font-weight: 500 } a:hover { "
+      "background: %s }</style></head><body>%s</body></html>",
+      dark ? "dark" : "light", name.c_str(), CssColor(background).c_str(),
+      dark ? "#e6e6e6" : "#1f1f1f",
+      dark ? "rgba(255,255,255,.22)" : "rgba(0,0,0,.18)",
+      dark ? "rgba(255,255,255,.08)" : "rgba(0,0,0,.05)", body.c_str());
+}
+
+void Tab::StartPdf(int64_t navigation_id,
+                   const GURL& url,
+                   const std::string& file_name,
+                   int64_t total_bytes,
+                   mojo::PendingRemote<network::mojom::URLLoader> loader,
+                   mojo::PendingReceiver<network::mojom::URLLoaderClient> client,
+                   mojo::ScopedDataPipeConsumerHandle body) {
+  Engine* engine = GetEngine();
+  const uint64_t id = engine->next_pdf_id++;
+  // A folder of its own, so the file keeps the PDF's name.
+  const base::FilePath path =
+      engine->pdf_directory
+          .AppendASCII(base::StringPrintf("%llu-%llu",
+                                          static_cast<unsigned long long>(id_),
+                                          static_cast<unsigned long long>(id)))
+          .Append(file_name);
+  Pdf pdf;
+  pdf.file_name = file_name;
+  pdf.saver = std::make_unique<PdfSaver>(
+      id, url, path, total_bytes, std::move(loader), std::move(client),
+      std::move(body),
+      base::BindRepeating(&Tab::NotifyPdf, base::Unretained(this)));
+  PdfSaver* saver = pdf.saver.get();
+  pdfs_.emplace(id, std::move(pdf));
+  pdf_navigations_[navigation_id] = id;
+  NotifyPdf(*saver, NE_PDF_STARTED);
+}
+
+void Tab::NotifyPdf(const PdfSaver& saver, ne_pdf_event_kind kind) {
+  Engine* engine = GetEngine();
+  if (!engine->has_ui_delegate || !engine->ui_delegate.on_pdf) {
+    return;
+  }
+  auto pdf = pdfs_.find(saver.id());
+  const std::string file_name =
+      pdf != pdfs_.end() ? pdf->second.file_name : std::string();
+  const std::string url = saver.url().spec();
+  const std::string path = saver.path().value();
+  ne_pdf_event event = {sizeof(ne_pdf_event)};
+  event.kind = kind;
+  event.pdf_id = saver.id();
+  event.state = saver.state();
+  event.received_bytes = saver.received_bytes();
+  event.total_bytes = saver.total_bytes();
+  event.url = {url.data(), url.size()};
+  event.path = {path.data(), path.size()};
+  event.file_name = {file_name.data(), file_name.size()};
+  engine->ui_delegate.on_pdf(engine->ui_delegate.user_data, handle_, &event);
+}
+
+void Tab::PdfDocumentCommitted(uint64_t shown_pdf) {
+  if (shown_pdf) {
+    auto pdf = pdfs_.find(shown_pdf);
+    if (pdf != pdfs_.end()) {
+      NotifyPdf(*pdf->second.saver, NE_PDF_COMMITTED);
+    }
+  }
+  // The other PDFs are no longer shown: stop saving them (their files stay
+  // for the app to clear) and forget them.
+  for (auto it = pdfs_.begin(); it != pdfs_.end();) {
+    if (it->first == shown_pdf) {
+      ++it;
+      continue;
+    }
+    if (!it->second.saver->finished()) {
+      it->second.saver->Cancel();
+      ++it;
+      continue;
+    }
+    it = pdfs_.erase(it);
+  }
+  for (auto it = pdf_navigations_.begin(); it != pdf_navigations_.end();) {
+    it = pdfs_.contains(it->second) ? std::next(it)
+                                    : pdf_navigations_.erase(it);
+  }
 }
 
 void Tab::TitleWasSet(content::NavigationEntry* entry) {
