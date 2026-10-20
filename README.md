@@ -255,8 +255,10 @@ page Macklin hit was a novelupdates.com series page). Now, as in Chrome:
   `navigator.plugins` and `mimeTypes` list Chrome's five PDF viewers and two
   types (Blink makes those fixed lists). The plugin is never created.
 
-Left as they are: `window.chrome` is undefined (as in Electron), and the
-hidden verification window's `outerWidth`/`outerHeight` equal the page's
+`window.chrome` is undefined in the engine (as in Electron); the app adds
+Chrome's `chrome.app`, `csi()` and `loadTimes()` at document start, which
+Google's sign-in requires (native/README.md → Google sign-in). Left as
+they are: the hidden verification window's `outerWidth`/`outerHeight` equal the page's
 and its `screenX`/`screenY` are 0. The app's check:
 `NOTOLIBRA_ENGINE_UI_TEST=1` (its first step, `engine-ui: fingerprint:`).
 
