@@ -156,6 +156,11 @@ class Tab : public content::WebContentsDelegate,
       const blink::mojom::WindowFeatures& window_features,
       bool user_gesture,
       bool* was_blocked) override;
+  content::WebContents* OpenURLFromTab(
+      content::WebContents* source,
+      const content::OpenURLParams& params,
+      base::OnceCallback<void(content::NavigationHandle&)>
+          navigation_handle_callback) override;
   void FindReply(content::WebContents* web_contents,
                  int request_id,
                  int number_of_matches,
@@ -252,6 +257,11 @@ class Tab : public content::WebContentsDelegate,
   void OnLog(const std::string& message) override;
 
  private:
+  // Offers `new_handle`, a page opened from this one, to the app as a new
+  // tab (NE_UI_NEW_TAB); the app adopts it or it closes.
+  void OfferNewTab(ne_tab* new_handle,
+                   const GURL& url,
+                   WindowOpenDisposition disposition);
   struct HeldFrame {
     base::apple::ScopedCFTypeRef<IOSurfaceRef> surface;
     // Bound for the capturer's frames, which go back to its pool.

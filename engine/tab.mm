@@ -26,6 +26,7 @@
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/page.h"
+#include "content/public/browser/page_navigator.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
@@ -929,12 +930,68 @@ content::WebContents* Tab::AddNewContents(
   auto* new_handle = new ne_tab;
   new_handle->impl = std::make_unique<Tab>(new_handle, std::move(new_contents));
   content::WebContents* contents = new_handle->impl->web_contents();
-  std::string url = target_url.spec();
+  OfferNewTab(new_handle, target_url, disposition);
+  if (was_blocked) {
+    *was_blocked = false;
+  }
+  return contents;
+}
+
+content::WebContents* Tab::OpenURLFromTab(
+    content::WebContents* source,
+    const content::OpenURLParams& params,
+    base::OnceCallback<void(content::NavigationHandle&)>
+        navigation_handle_callback) {
+  // As content_shell does. Links opened elsewhere (⌘-click, a middle click,
+  // shift-click, a form targeting a new window) come here rather than to
+  // AddNewContents: they get a new page, loaded here with the request's
+  // referrer and body, offered to the app as window.open's are.
+  content::WebContents* target = nullptr;
+  switch (params.disposition) {
+    case WindowOpenDisposition::CURRENT_TAB:
+      target = source;
+      break;
+    case WindowOpenDisposition::NEW_FOREGROUND_TAB:
+    case WindowOpenDisposition::NEW_BACKGROUND_TAB:
+    case WindowOpenDisposition::NEW_POPUP:
+    case WindowOpenDisposition::NEW_WINDOW: {
+      content::WebContents::CreateParams create(source->GetBrowserContext(),
+                                                params.source_site_instance);
+      create.initially_hidden = false;
+      auto* new_handle = new ne_tab;
+      new_handle->impl = std::make_unique<Tab>(
+          new_handle, content::WebContents::Create(create));
+      target = new_handle->impl->web_contents();
+      base::WeakPtr<content::NavigationHandle> navigation =
+          target->GetController().LoadURLWithParams(
+              content::NavigationController::LoadURLParams(params));
+      if (navigation_handle_callback && navigation) {
+        std::move(navigation_handle_callback).Run(*navigation);
+      }
+      OfferNewTab(new_handle, params.url, params.disposition);
+      return target;
+    }
+    default:
+      return nullptr;
+  }
+  base::WeakPtr<content::NavigationHandle> navigation =
+      target->GetController().LoadURLWithParams(
+          content::NavigationController::LoadURLParams(params));
+  if (navigation_handle_callback && navigation) {
+    std::move(navigation_handle_callback).Run(*navigation);
+  }
+  return target;
+}
+
+void Tab::OfferNewTab(ne_tab* new_handle,
+                      const GURL& url,
+                      WindowOpenDisposition disposition) {
+  std::string spec = url.spec();
   ne_ui_request request = {sizeof(ne_ui_request)};
   request.kind = NE_UI_NEW_TAB;
   request.tab = handle_;
-  request.message = {url.data(), url.size()};
-  request.url = {url.data(), url.size()};
+  request.message = {spec.data(), spec.size()};
+  request.url = {spec.data(), spec.size()};
   request.new_tab = new_handle;
   switch (disposition) {
     case WindowOpenDisposition::NEW_BACKGROUND_TAB:
@@ -961,10 +1018,6 @@ content::WebContents* Tab::AddNewContents(
             }
           },
           new_handle));
-  if (was_blocked) {
-    *was_blocked = false;
-  }
-  return contents;
 }
 
 void Tab::FindReply(content::WebContents* web_contents,
