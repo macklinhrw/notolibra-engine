@@ -3,7 +3,37 @@
 Notolibra's own Chromium build (option D). This repository is checked out at
 `src/notolibra` inside a Chromium checkout, the way Brave's `brave-core` sits at
 `src/brave`. The plan is `docs/research/browser-engine/plan.md` in the Notolibra
-app repository; section numbers below refer to it. Private; proprietary.
+app repository; section numbers below refer to it. Free software under the
+GNU GPL v3.0 or later (see Licences).
+
+## Building it
+
+You need an Apple Silicon Mac, about 100 GB of free disk and a few hours for
+the first build. The build uses Xcode, or only the Command Line Tools with
+`build/args/clt.gn` ([docs/xcode.md](docs/xcode.md)); either way it needs
+Xcode 26's Metal toolchain (`xcodebuild -downloadComponent MetalToolchain`).
+The scripts expect Chromium's [depot_tools](https://commondatastorage.googleapis.com/chrome-infra-docs/flat/depot_tools/docs/html/depot_tools_tutorial.html#_setting_up)
+at `~/depot_tools`.
+
+```sh
+mkdir ~/chromium && cd ~/chromium
+fetch --nohooks --no-history chromium        # Chromium's checkout tool, from depot_tools: makes ~/chromium/src
+git clone https://github.com/macklinhrw/notolibra-engine src/notolibra
+src/notolibra/scripts/sync                   # Chromium at CHROMIUM_VERSION, with patches/ applied
+src/notolibra/scripts/build --config release_test notolibra/engine
+```
+
+That leaves `NotolibraEngine.framework` and `libffmpeg.dylib` in
+`~/chromium/src/out/ReleaseTest`. The app's bundler packages them from there
+by default, or from `NOTOLIBRA_ENGINE_OUT`:
+
+```sh
+cd <notolibra checkout>/native && cargo run -p bundle
+```
+
+The app checks the engine's API version (`NE_API_VERSION` in
+`api/ne_engine.h`) when it loads it; `native/ENGINE_VERSION` in the app
+repository names the engine commit it was last built against.
 
 ## Layout
 
@@ -36,7 +66,7 @@ test/engine/run_smoke             # the engine from a plain AppKit host, hidden
 proto/run_checks                  # the gpui host's Phase 0 checks, hidden
 ```
 
-`scripts/build` refuses to start under 60 GiB free (AGENTS.md's floor is
+`scripts/build` refuses to start under 60 GiB free (the floor is
 50 GiB), samples `memory_pressure` every 20 s and stops its own build if free
 memory drops below `--min-free-mem`, and compresses large logs with zstd. Logs
 and memory samples go to `out/<Config>/logs/`. A stopped build resumes
@@ -216,13 +246,12 @@ not a normal exit, and not for tabs being closed); the app draws its own
 `ne_tab`) never report it. The app's check: `NOTOLIBRA_WEBPDF_TEST=1`
 (native/README.md, Browser engine → PDFs, downloads and crashed pages).
 
-## What pages see of the browser
+## Web compatibility: what pages see
 
-Bot checks (Cloudflare's challenge, Turnstile) compare what a page can read
-of the browser with what Chrome would show. Until October 19, 2026 the
-engine disagreed with Chrome in four ways, and Cloudflare's challenge never
-cleared (its "Verify you are human" box came back after every click; the
-page Macklin hit was a novelupdates.com series page). Now, as in Chrome:
+The engine reports what a stock Chromium build reports. Until October 19,
+2026 it differed in four ways, and sites that check that a browser is
+consistent (Cloudflare's challenge, for example) asked again after every
+click. Now, as in Chromium:
 
 - **Client hints** are `embedder_support::GetUserAgentMetadata()` (a
   Chromium build's: Chromium and a GREASE brand such as `Not:A-Brand`, the
@@ -235,7 +264,7 @@ page Macklin hit was a novelupdates.com series page). Now, as in Chrome:
   "Notolibra", no GREASE, `fullVersionList` without the second brand, no
   platform version), and requests carried no `Sec-CH-UA` headers at all,
   with Chrome's user agent string. There is no Notolibra brand: a plain
-  Chromium list is what Chromium builds send, and what passes.
+  Chromium list is what Chromium builds send.
 - **Languages** come from the system's preferred languages
   (`engine/languages.mm`: `[NSLocale preferredLanguages]`, script subtags
   dropped, each followed by its base language as Chrome's accept-languages
@@ -320,8 +349,15 @@ engine runs. Counts only are logged.
 
 ## Licences
 
-Closed source. Only permissive code goes in here: our own, Chromium's
-(BSD-3), CEF's (BSD-3, with notices). GPL code (Helium's patches) and LGPL code
-(Vivaldi's FFmpeg-derived files) are reference only. Patches that modify
-FFmpeg's LGPL files say so in their headers; the modified FFmpeg ships as its
-own `libffmpeg.dylib` and is offered in source form under the LGPL.
+The engine's own code (`api/`, `engine/`, `scripts/`, `test/`, `proto/`,
+`build/`) is free software under the GNU General Public License v3.0 or later
+([LICENSE](LICENSE)), as is the Notolibra app that loads it.
+
+`patches/` modifies Chromium's BSD-3-Clause sources, and those patch hunks are
+also offered under Chromium's BSD-3-Clause licence, so they can be sent
+upstream. Patches that modify FFmpeg's LGPL files say so in their headers; the
+modified FFmpeg is built as its own `libffmpeg.dylib`, and anyone distributing
+a build must offer its source (this repository plus Chromium's FFmpeg at the
+pinned version) under the LGPL. Chromium itself is BSD-3-Clause, with its
+third-party components under their own licences: generate the credits for a
+build with `tools/licenses/licenses.py credits` and ship them with it.
