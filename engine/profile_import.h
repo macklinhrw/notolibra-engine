@@ -1,4 +1,5 @@
-// Copyright 2026 Notolibra. All rights reserved.
+// Copyright 2026 The Notolibra Authors
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Importing another browser's cookies and local storage into a profile
 // (ne_profile_import_cookies, ne_profile_import_local_storage). Writes go

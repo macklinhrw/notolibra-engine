@@ -1,10 +1,11 @@
-/* Copyright 2026 Notolibra. All rights reserved.
+/* Copyright 2026 The Notolibra Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * ne_engine.h: the Notolibra engine's embedding API (Phase 0 stub).
  *
  * This header is the only interface between the Notolibra app (Rust + gpui)
  * and NotolibraEngine.framework (Chromium plus src/notolibra). The app reads
- * it through bindgen (`engine-sys`). Its shape copies ArcCore's object graph
+ * it through bindgen (`engine-sys`). Its shape is an object graph
  * (app -> profile -> window -> tab, plus a UI delegate) with C handles in
  * place of Objective-C classes; see plan.md §2.2.
  *
@@ -142,7 +143,7 @@ typedef enum ne_terminate_reply {
 typedef void (*ne_terminate_fn)(void* user_data, ne_terminate_reply reply);
 
 /* Closes tabs (running beforeunload), then BrowserMainRunner::Shutdown().
- * Mirrors ArcCore's tryToTerminate. */
+ * Like AppKit's applicationShouldTerminate:, it can answer now or later. */
 NE_EXPORT ne_terminate_reply ne_app_try_terminate(ne_app* app,
                                                   ne_terminate_fn done,
                                                   void* user_data);
@@ -210,8 +211,7 @@ typedef enum ne_find_flags {
 NE_EXPORT void ne_tab_find(ne_tab* tab, ne_string_view text, uint32_t flags);
 NE_EXPORT void ne_tab_stop_finding(ne_tab* tab, bool keep_selection);
 
-/* Why script runs in a page; logged, and gates which worlds may be used
- * (ArcCore's executeJavascript(script, reason:)). */
+/* Why script runs in a page; logged, and gates which worlds may be used. */
 typedef enum ne_eval_reason {
   NE_EVAL_APP_FEATURE = 0,            /* our own feature, isolated world */
   NE_EVAL_USER_REQUEST = 1,           /* e.g. a user-run bookmarklet, main world */

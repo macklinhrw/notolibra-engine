@@ -1,4 +1,5 @@
-// Copyright 2026 Notolibra. All rights reserved.
+// Copyright 2026 The Notolibra Authors
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Content blocking in the browser process (plan.md §4.6): every subresource
 // and subframe request of a page goes through a proxy in front of its

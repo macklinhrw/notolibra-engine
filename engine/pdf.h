@@ -1,4 +1,5 @@
-// Copyright 2026 Notolibra. All rights reserved.
+// Copyright 2026 The Notolibra Authors
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // PDFs without a viewer of the engine's own (ne_engine.h, ne_pdf_event).
 // A navigation whose response is a PDF commits a document the engine makes,

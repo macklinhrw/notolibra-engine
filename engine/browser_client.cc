@@ -1,4 +1,5 @@
-// Copyright 2026 Notolibra. All rights reserved.
+// Copyright 2026 The Notolibra Authors
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "notolibra/engine/browser_client.h"
 
@@ -101,7 +102,8 @@ blink::UserAgentMetadata BrowserClient::GetUserAgentMetadata() {
   // brand and "Chromium" in brands and fullVersionList alike, and the
   // platform version. Until October 19, 2026 a hand-made list (Chromium and
   // "Notolibra", no GREASE, fullVersionList without the second brand, no
-  // platform version) kept Cloudflare's challenge from ever clearing.
+  // platform version) made sites that check browser consistency, such as
+  // Cloudflare's challenge, ask again and again.
   return embedder_support::GetUserAgentMetadata();
 }
 

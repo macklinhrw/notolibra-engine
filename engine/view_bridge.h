@@ -1,4 +1,5 @@
-// Copyright 2026 Notolibra. All rights reserved.
+// Copyright 2026 The Notolibra Authors
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // The off-screen view's stand-in for RenderWidgetHostViewMac's NSView
 // (plan.md §2.5). A tab's page renders through Chromium's own Mac view, with

@@ -1,4 +1,5 @@
-// Copyright 2026 Notolibra. All rights reserved.
+// Copyright 2026 The Notolibra Authors
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #ifndef NOTOLIBRA_ENGINE_BROWSER_CONTEXT_H_
 #define NOTOLIBRA_ENGINE_BROWSER_CONTEXT_H_
@@ -123,8 +124,8 @@ class SslHostState : public content::SSLHostStateDelegate {
 // Notifications, which the engine doesn't show yet. The service exists so
 // that Notification.permission reports the permission's real state:
 // "default" until a site asks, then the app's answer (PermissionManager's
-// prompt). Content reports "denied" for a profile without a service, a
-// headless browser's tell that Cloudflare's challenge looks for.
+// prompt). Content reports "denied" for a profile without a service, which
+// a stock Chromium build never does.
 class NotificationService : public content::PlatformNotificationService {
  public:
   NotificationService();

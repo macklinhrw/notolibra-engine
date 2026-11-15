@@ -1,4 +1,5 @@
-// Copyright 2026 Notolibra. All rights reserved.
+// Copyright 2026 The Notolibra Authors
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // A tab's interface surfaces as data (plan.md §2.6): file choosers, the
 // page's context menu and its icon. Each request goes to the app through

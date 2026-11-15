@@ -1,4 +1,5 @@
-// Copyright 2026 Notolibra. All rights reserved.
+// Copyright 2026 The Notolibra Authors
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "notolibra/engine/main_delegate.h"
 
@@ -92,7 +93,7 @@ void ContentClient::AddPlugins(std::vector<content::WebPluginInfo>* plugins) {
   // as Chrome's, Electron's and CEF's are: navigator.pdfViewerEnabled, and
   // navigator.plugins and mimeTypes list Chrome's five PDF viewers and its
   // two PDF types (Blink makes the lists from one plugin with
-  // application/pdf). Empty lists are a headless browser's tell. The plugin
+  // application/pdf). Stock Chromium never reports empty lists. The plugin
   // is never created: the PDF throttle answers PDF navigations, and the
   // app's script turns <embed> and <object> PDFs into frames.
   Engine* engine = GetEngine();

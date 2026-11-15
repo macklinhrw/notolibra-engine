@@ -1,4 +1,5 @@
-// Copyright 2026 Notolibra. All rights reserved.
+// Copyright 2026 The Notolibra Authors
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // The renderer's side of a frame (frame_agent.mojom): it holds the
 // document-start scripts the browser sends at commit and runs them as the

@@ -1,4 +1,5 @@
-// Copyright 2026 Notolibra. All rights reserved.
+// Copyright 2026 The Notolibra Authors
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Whether a page's drag may become a system drag. A page starts a drag (of
 // selected text, a link, an image, a draggable element) by asking the

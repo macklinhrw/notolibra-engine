@@ -1,4 +1,5 @@
-// Copyright 2026 Notolibra. All rights reserved.
+// Copyright 2026 The Notolibra Authors
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // The languages pages are offered, from the system's preferred languages
 // (System Settings > General > Language & Region), as Chrome derives its

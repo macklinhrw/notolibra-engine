@@ -1,4 +1,5 @@
-// Copyright 2026 Notolibra. All rights reserved.
+// Copyright 2026 The Notolibra Authors
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Notolibra Engine Helper: renderer, GPU, utility and other child processes.
 // Each starts in the macOS sandbox Chromium chose for its type: the browser

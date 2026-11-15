@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-# Copyright 2026 Notolibra. All rights reserved.
+# Copyright 2026 The Notolibra Authors
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Quilt-style patch series for the Notolibra engine.
 
 The series lives in patches/series, one patch per line, in apply order.

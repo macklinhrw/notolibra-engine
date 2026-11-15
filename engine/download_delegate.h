@@ -1,4 +1,5 @@
-// Copyright 2026 Notolibra. All rights reserved.
+// Copyright 2026 The Notolibra Authors
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Downloads as data (plan.md §2.6): each new download is offered to the app
 // (NE_UI_DOWNLOAD) with its suggested file name, and saved where the app

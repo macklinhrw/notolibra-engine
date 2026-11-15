@@ -1,4 +1,5 @@
-// Copyright 2026 Notolibra. All rights reserved.
+// Copyright 2026 The Notolibra Authors
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Hidden smoke check of NotolibraEngine.framework from a plain AppKit host
 // (no gpui): init inside -[NSApplication run], attach mode, a tab, frames as

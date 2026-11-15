@@ -1,4 +1,5 @@
-// Copyright 2026 Notolibra. All rights reserved.
+// Copyright 2026 The Notolibra Authors
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // One page (ne_tab). Phase 0 renders windowless: the WebContents' NSView is
 // never put in a window (as content_shell's headless web test mode does), and
