@@ -1,0 +1,184 @@
+Reason: Chromium mutes a tab by closing its audio output streams and opening
+fake ones, and unmutes by swapping back. Video playback follows the audio
+clock, so a playing video froze or skipped a frame each time the app's
+Audio panel muted or unmuted the page (November 1, 2026). A muted stream now
+keeps playing at volume 0 (OutputController::OutputVolume); loopback capture
+still gets the audio at the page's volume, as before. Upstream main swaps
+streams the same way. No upstream bug.
+
+diff --git a/services/audio/output_controller_unittest.cc b/services/audio/output_controller_unittest.cc
+index a005410e0a..569029c39b 100644
+--- a/services/audio/output_controller_unittest.cc
++++ b/services/audio/output_controller_unittest.cc
+@@ -460,8 +460,9 @@ class OutputControllerTest : public ::testing::Test {
+ 
+   void StartMutingBeforePlaying() { controller_->StartMuting(); }
+ 
++  // Notolibra: muting keeps the stream playing, so playback doesn't restart.
+   void StartMutingWhilePlaying() {
+-    EXPECT_CALL(mock_event_handler_, OnControllerPlaying());
++    EXPECT_CALL(mock_event_handler_, OnControllerPlaying()).Times(0);
+     controller_->StartMuting();
+     Mock::VerifyAndClearExpectations(&mock_event_handler_);
+   }
+@@ -469,7 +470,7 @@ class OutputControllerTest : public ::testing::Test {
+   void StopMutingBeforePlaying() { controller_->StopMuting(); }
+ 
+   void StopMutingWhilePlaying() {
+-    EXPECT_CALL(mock_event_handler_, OnControllerPlaying());
++    EXPECT_CALL(mock_event_handler_, OnControllerPlaying()).Times(0);
+     controller_->StopMuting();
+     Mock::VerifyAndClearExpectations(&mock_event_handler_);
+   }
+@@ -656,76 +657,76 @@ double GetStreamVolume(AudioOutputStream* stream) {
+   return result;
+ }
+ 
+-// Tests that muting before the stream is created will result in only the
+-// "muting stream" being created, and not any local playout streams (that might
+-// possibly cause an audible blip).
++// Notolibra: muting plays the one stream at volume 0 instead of swapping in a
++// fake stream (whose swap froze video for a frame). Muting before the stream is
++// created opens it at volume 0, so it never plays a blip.
+ TEST_F(OutputControllerTest, MuteCreatePlayClose) {
+   StartMutingBeforePlaying();
+   EXPECT_EQ(nullptr, last_created_stream());  // No stream yet.
+   EXPECT_EQ(nullptr, last_closed_stream());   // No stream yet.
+ 
+   Create();
+-  MockAudioOutputStream* const mute_stream = last_created_stream();
+-  ASSERT_TRUE(mute_stream);
++  MockAudioOutputStream* const stream = last_created_stream();
++  ASSERT_TRUE(stream);
+   EXPECT_EQ(nullptr, last_closed_stream());
+-  EXPECT_EQ(AudioParameters::AUDIO_FAKE, mute_stream->format());
++  EXPECT_EQ(GetTestParams().format(), stream->format());
++  EXPECT_EQ(0.0, GetStreamVolume(stream));
+ 
+   Play();
+-  ASSERT_EQ(mute_stream, last_created_stream());
++  ASSERT_EQ(stream, last_created_stream());
+   EXPECT_EQ(nullptr, last_closed_stream());
+-  EXPECT_EQ(AudioParameters::AUDIO_FAKE, mute_stream->format());
++  EXPECT_EQ(0.0, GetStreamVolume(stream));
+ 
+   Close();
+-  EXPECT_EQ(mute_stream, last_created_stream());
+-  EXPECT_EQ(mute_stream, last_closed_stream());
++  EXPECT_EQ(stream, last_created_stream());
++  EXPECT_EQ(stream, last_closed_stream());
+ }
+ 
+-// Tests that a local playout stream is shut-down and replaced with a "muting
+-// stream" if StartMuting() is called after playback begins.
++// Muting while playing silences the playing stream; it isn't replaced.
+ TEST_F(OutputControllerTest, CreatePlayMuteClose) {
+   Create();
+-  MockAudioOutputStream* const playout_stream = last_created_stream();
+-  ASSERT_TRUE(playout_stream);
++  MockAudioOutputStream* const stream = last_created_stream();
++  ASSERT_TRUE(stream);
+   EXPECT_EQ(nullptr, last_closed_stream());
+ 
+   Play();
+-  ASSERT_EQ(playout_stream, last_created_stream());
++  ASSERT_EQ(stream, last_created_stream());
+   EXPECT_EQ(nullptr, last_closed_stream());
+-  EXPECT_EQ(GetTestParams().format(), playout_stream->format());
+-  EXPECT_EQ(kTestVolume, GetStreamVolume(playout_stream));
++  EXPECT_EQ(GetTestParams().format(), stream->format());
++  EXPECT_EQ(kTestVolume, GetStreamVolume(stream));
+ 
+   StartMutingWhilePlaying();
+-  MockAudioOutputStream* const mute_stream = last_created_stream();
+-  ASSERT_TRUE(mute_stream);
+-  EXPECT_EQ(playout_stream, last_closed_stream());
+-  EXPECT_EQ(AudioParameters::AUDIO_FAKE, mute_stream->format());
++  EXPECT_EQ(stream, last_created_stream());
++  EXPECT_EQ(nullptr, last_closed_stream());
++  EXPECT_EQ(0.0, GetStreamVolume(stream));
++
++  // The page's own volume changes wait until unmuting.
++  controller_->SetVolume(kTestVolume / 2);
++  EXPECT_EQ(0.0, GetStreamVolume(stream));
+ 
+   Close();
+-  EXPECT_EQ(mute_stream, last_created_stream());
+-  EXPECT_EQ(mute_stream, last_closed_stream());
++  EXPECT_EQ(stream, last_created_stream());
++  EXPECT_EQ(stream, last_closed_stream());
+ }
+ 
+-// Tests that the "muting stream" is shut down and replaced with the normal
+-// playout stream after StopMuting() is called.
++// Unmuting restores the volume on the same stream.
+ TEST_F(OutputControllerTest, MutePlayUnmuteClose) {
+   StartMutingBeforePlaying();
+   Create();
+   Play();
+-  MockAudioOutputStream* const mute_stream = last_created_stream();
+-  ASSERT_TRUE(mute_stream);
++  MockAudioOutputStream* const stream = last_created_stream();
++  ASSERT_TRUE(stream);
+   EXPECT_EQ(nullptr, last_closed_stream());
+-  EXPECT_EQ(AudioParameters::AUDIO_FAKE, mute_stream->format());
++  EXPECT_EQ(0.0, GetStreamVolume(stream));
+ 
+   StopMutingWhilePlaying();
+-  MockAudioOutputStream* const playout_stream = last_created_stream();
+-  ASSERT_TRUE(playout_stream);
+-  EXPECT_EQ(mute_stream, last_closed_stream());
+-  EXPECT_EQ(GetTestParams().format(), playout_stream->format());
+-  EXPECT_EQ(kTestVolume, GetStreamVolume(playout_stream));
++  EXPECT_EQ(stream, last_created_stream());
++  EXPECT_EQ(nullptr, last_closed_stream());
++  EXPECT_EQ(kTestVolume, GetStreamVolume(stream));
+ 
+   Close();
+-  EXPECT_EQ(playout_stream, last_created_stream());
+-  EXPECT_EQ(playout_stream, last_closed_stream());
++  EXPECT_EQ(stream, last_created_stream());
++  EXPECT_EQ(stream, last_closed_stream());
+ }
+ 
+ TEST_F(OutputControllerTest, SnoopCreatePlayStopClose) {
+@@ -797,29 +798,29 @@ TEST_F(OutputControllerTest, SnoopWhileMuting) {
+   EXPECT_EQ(nullptr, last_closed_stream());   // No stream yet.
+ 
+   Create();
+-  MockAudioOutputStream* const mute_stream = last_created_stream();
+-  ASSERT_TRUE(mute_stream);
++  MockAudioOutputStream* const stream = last_created_stream();
++  ASSERT_TRUE(stream);
+   EXPECT_EQ(nullptr, last_closed_stream());
+ 
+   Play();
+-  ASSERT_EQ(mute_stream, last_created_stream());
++  ASSERT_EQ(stream, last_created_stream());
+   EXPECT_EQ(nullptr, last_closed_stream());
+-  EXPECT_EQ(AudioParameters::AUDIO_FAKE, mute_stream->format());
++  EXPECT_EQ(0.0, GetStreamVolume(stream));
+ 
+   StartSnooping(&snooper);
+-  ASSERT_EQ(mute_stream, last_created_stream());
++  ASSERT_EQ(stream, last_created_stream());
+   EXPECT_EQ(nullptr, last_closed_stream());
+-  EXPECT_EQ(AudioParameters::AUDIO_FAKE, mute_stream->format());
++  EXPECT_EQ(0.0, GetStreamVolume(stream));
+   WaitForSnoopedData(&snooper);
+ 
+   StopSnooping(&snooper);
+-  ASSERT_EQ(mute_stream, last_created_stream());
++  ASSERT_EQ(stream, last_created_stream());
+   EXPECT_EQ(nullptr, last_closed_stream());
+-  EXPECT_EQ(AudioParameters::AUDIO_FAKE, mute_stream->format());
++  EXPECT_EQ(0.0, GetStreamVolume(stream));
+ 
+   Close();
+-  EXPECT_EQ(mute_stream, last_created_stream());
+-  EXPECT_EQ(mute_stream, last_closed_stream());
++  EXPECT_EQ(stream, last_created_stream());
++  EXPECT_EQ(stream, last_closed_stream());
+ }
+ 
+ TEST_F(OutputControllerTest, FlushWhenStreamIsPlayingTriggersError) {

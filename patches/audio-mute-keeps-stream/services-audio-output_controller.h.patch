@@ -1,0 +1,32 @@
+Reason: Chromium mutes a tab by closing its audio output streams and opening
+fake ones, and unmutes by swapping back. Video playback follows the audio
+clock, so a playing video froze or skipped a frame each time the app's
+Audio panel muted or unmuted the page (November 1, 2026). A muted stream now
+keeps playing at volume 0 (OutputController::OutputVolume); loopback capture
+still gets the audio at the page's volume, as before. Upstream main swaps
+streams the same way. No upstream bug.
+
+diff --git a/services/audio/output_controller.h b/services/audio/output_controller.h
+index 8e279c4373..600ca9e372 100644
+--- a/services/audio/output_controller.h
++++ b/services/audio/output_controller.h
+@@ -296,6 +296,9 @@ class OutputController : public media::AudioOutputStream::AudioSourceCallback,
+   // Helper method that stops the physical stream.
+   void StopStream();
+ 
++  // The volume the stream plays at: 0 while muted, else |volume_|.
++  double OutputVolume() const;
++
+   // Helper method that stops, closes, and NULLs |*stream_|.
+   void StopCloseAndClearStream();
+ 
+@@ -344,8 +347,7 @@ class OutputController : public media::AudioOutputStream::AudioSourceCallback,
+ 
+   raw_ptr<media::AudioOutputStream, DanglingUntriaged> stream_;
+ 
+-  // When true, local audio output should be muted; either by having audio
+-  // diverted to |diverting_to_stream_|, or a fake AudioOutputStream.
++  // When true, local audio output is muted: the stream plays at volume 0.
+   bool disable_local_output_;
+ 
+   // The snoopers examining or grabbing a copy of the audio data from the

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <utility>
 
 #include "base/apple/owned_objc.h"
@@ -45,6 +46,7 @@
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "net/base/net_errors.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
+#include "third_party/blink/public/common/input/web_gesture_event.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
 #include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
@@ -61,6 +63,49 @@
 namespace notolibra {
 
 namespace {
+
+// A script's answer for `done`, given exactly once: its result as JSON, or
+// NE_ERR_GONE when Chromium drops the callback without running it (the frame
+// or its renderer went away first, or the page was replaced before it ran).
+// Without this, a dropped callback left the app waiting until its timeout.
+class EvalReply {
+ public:
+  EvalReply(ne_eval_fn done, void* user_data)
+      : done_(done), user_data_(user_data) {}
+  EvalReply(const EvalReply&) = delete;
+  EvalReply& operator=(const EvalReply&) = delete;
+  ~EvalReply() {
+    if (done_) {
+      std::exchange(done_, nullptr)(std::exchange(user_data_, nullptr),
+                                    NE_ERR_GONE, nullptr);
+    }
+  }
+
+  void Answer(base::Value value) {
+    std::string json;
+    base::JSONWriter::Write(value, &json);
+    std::exchange(done_, nullptr)(std::exchange(user_data_, nullptr), NE_OK,
+                                  json.c_str());
+  }
+
+  // The callback Chromium runs with the result, or drops.
+  static content::RenderFrameHost::JavaScriptResultCallback Callback(
+      ne_eval_fn done,
+      void* user_data) {
+    if (!done) {
+      return {};
+    }
+    return base::BindOnce(
+        [](std::unique_ptr<EvalReply> reply, base::Value value) {
+          reply->Answer(std::move(value));
+        },
+        std::make_unique<EvalReply>(done, user_data));
+  }
+
+ private:
+  ne_eval_fn done_;
+  raw_ptr<void> user_data_;
+};
 
 int Modifiers(uint32_t ne_modifiers, int button_flags = 0) {
   int modifiers = button_flags;
@@ -275,6 +320,9 @@ Tab::~Tab() {
   // Views give their NSViews back before they go.
   bridges_.clear();
   Observe(nullptr);
+  // The closing WebContents still calls its delegate (a tab playing sound
+  // reports it stopped, NavigationStateChanged) after web_contents_ is null.
+  web_contents_->SetDelegate(nullptr);
   auto& tabs = GetEngine()->tabs;
   tabs.erase(std::remove(tabs.begin(), tabs.end(), this), tabs.end());
   web_contents_.reset();
@@ -711,6 +759,25 @@ void Tab::SendInput(const ne_input_event& event) {
       mac_view->RouteOrProcessWheelEvent(wheel);
       break;
     }
+    case NE_INPUT_PINCH: {
+      // As RenderWidgetHostViewCocoa's -magnifyWithEvent: builds it
+      // (WebGestureEventBuilder): a touchpad pinch the page first sees as
+      // ctrl+wheel. The view applies Chrome's threshold before zooming.
+      blink::WebInputEvent::Type type =
+          event.phase == 1   ? blink::WebInputEvent::Type::kGesturePinchBegin
+          : event.phase == 2 ? blink::WebInputEvent::Type::kGesturePinchUpdate
+                             : blink::WebInputEvent::Type::kGesturePinchEnd;
+      blink::WebGestureEvent pinch(type, Modifiers(event.modifiers), now,
+                                   blink::WebGestureDevice::kTouchpad);
+      pinch.SetPositionInWidget(position);
+      pinch.SetPositionInScreen(position);
+      if (type == blink::WebInputEvent::Type::kGesturePinchUpdate) {
+        pinch.data.pinch_update.scale = event.delta_x;
+      }
+      pinch.SetNeedsWheelEvent(true);
+      mac_view->PinchEvent(pinch, /*is_synthetically_injected=*/false);
+      break;
+    }
     case NE_INPUT_KEY_DOWN:
     case NE_INPUT_KEY_UP:
     case NE_INPUT_CHAR: {
@@ -811,16 +878,7 @@ void Tab::Eval(const std::string& script,
                ne_eval_fn done,
                void* user_data) {
   content::RenderFrameHost* frame = web_contents_->GetPrimaryMainFrame();
-  auto callback = base::BindOnce(
-      [](ne_eval_fn done, void* user_data, base::Value value) {
-        if (!done) {
-          return;
-        }
-        std::string json;
-        base::JSONWriter::Write(value, &json);
-        done(user_data, NE_OK, json.c_str());
-      },
-      done, user_data);
+  auto callback = EvalReply::Callback(done, user_data);
   if (reason == NE_EVAL_APP_FEATURE) {
     frame->ExecuteJavaScriptInIsolatedWorld(
         base::UTF8ToUTF16(script), std::move(callback),
@@ -859,16 +917,7 @@ void Tab::EvalInFrame(ne_frame_id id,
     }
     return;
   }
-  content::RenderFrameHost::JavaScriptResultCallback callback;
-  if (done) {
-    callback = base::BindOnce(
-        [](ne_eval_fn done, void* user_data, base::Value value) {
-          std::string json;
-          base::JSONWriter::Write(value, &json);
-          done(user_data, NE_OK, json.c_str());
-        },
-        done, user_data);
-  }
+  auto callback = EvalReply::Callback(done, user_data);
   if (world == NE_WORLD_APP) {
     frame->ExecuteJavaScriptInIsolatedWorld(
         base::UTF8ToUTF16(script), std::move(callback),

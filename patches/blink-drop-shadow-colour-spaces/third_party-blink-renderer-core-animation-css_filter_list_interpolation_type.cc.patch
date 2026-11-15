@@ -1,0 +1,49 @@
+Blink's filter list interpolation didn't bring drop-shadow colours into one colour space (box-shadow's does, InterpolableShadow::MaybeMergeSingles), so a drop-shadow animating between colours in different spaces (rgb and oklch) interpolated mismatched colours and failed InterpolableColor's DCHECK, stopping the renderer in development builds (delta.dev, October 21, 2026). test/engine/smoke.mm: drop-shadow-colour-spaces.
+
+diff --git a/third_party/blink/renderer/core/animation/css_filter_list_interpolation_type.cc b/third_party/blink/renderer/core/animation/css_filter_list_interpolation_type.cc
+index 56367a9345..f3ceb389e1 100644
+--- a/third_party/blink/renderer/core/animation/css_filter_list_interpolation_type.cc
++++ b/third_party/blink/renderer/core/animation/css_filter_list_interpolation_type.cc
+@@ -10,6 +10,7 @@
+ #include "base/memory/ptr_util.h"
+ #include "base/memory/raw_ref.h"
+ #include "third_party/blink/renderer/core/animation/interpolable_filter.h"
++#include "third_party/blink/renderer/core/animation/interpolable_shadow.h"
+ #include "third_party/blink/renderer/core/animation/list_interpolation_functions.h"
+ #include "third_party/blink/renderer/core/animation/underlying_value_owner.h"
+ #include "third_party/blink/renderer/core/css/css_identifier_value.h"
+@@ -234,7 +235,25 @@ PairwiseInterpolationValue CSSFilterListInterpolationType::MaybeMergeSingles(
+     }
+   }
+ 
++  // Brings each pair of drop-shadow colours into one colour space, as
++  // InterpolableShadow::MaybeMergeSingles does for box-shadow; otherwise a
++  // drop-shadow animating between, say, rgb() and oklch() interpolates
++  // colours in different spaces (and fails a DCHECK).
++  auto setup_shadow_colors = [](InterpolableList& from, InterpolableList& to) {
++    for (wtf_size_t i = 0; i < from.length() && i < to.length(); i++) {
++      auto* from_filter = To<InterpolableFilter>(from.GetMutable(i).Get());
++      auto* to_filter = To<InterpolableFilter>(to.GetMutable(i).Get());
++      if (from_filter->GetType() ==
++              FilterOperation::OperationType::kDropShadow &&
++          to_filter->GetType() == FilterOperation::OperationType::kDropShadow) {
++        InterpolableShadow::MaybeMergeSingles(&from_filter->Value(),
++                                              &to_filter->Value());
++      }
++    }
++  };
++
+   if (start_length == end_length) {
++    setup_shadow_colors(start_interpolable_list, end_interpolable_list);
+     return PairwiseInterpolationValue(std::move(start.interpolable_value),
+                                       std::move(end.interpolable_value));
+   }
+@@ -264,6 +283,8 @@ PairwiseInterpolationValue CSSFilterListInterpolationType::MaybeMergeSingles(
+     }
+   }
+   shorter.interpolable_value = std::move(extended_interpolable_list);
++  setup_shadow_colors(To<InterpolableList>(*start.interpolable_value),
++                      To<InterpolableList>(*end.interpolable_value));
+ 
+   return PairwiseInterpolationValue(std::move(start.interpolable_value),
+                                     std::move(end.interpolable_value));

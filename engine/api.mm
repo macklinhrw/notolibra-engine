@@ -34,6 +34,7 @@
 #include "content/public/app/content_main_runner.h"
 #include "base/observer_list.h"
 #include "content/public/browser/host_zoom_map.h"
+#include "content/public/browser/media_session.h"
 #include "content/public/browser/native_event_processor_mac.h"
 #include "content/public/browser/native_event_processor_observer_mac.h"
 #include "content/public/browser/navigation_controller.h"
@@ -662,6 +663,30 @@ NE_EXPORT void ne_app_set_document_start(ne_app* app,
 NE_EXPORT void ne_download_cancel(ne_app* app, uint64_t download_id) {
   if (g_profile && g_profile->context) {
     g_profile->context->CancelDownload(static_cast<uint32_t>(download_id));
+  }
+}
+
+NE_EXPORT void ne_tab_set_audio_muted(ne_tab* tab, bool muted) {
+  if (tab && tab->impl->web_contents()) {
+    tab->impl->web_contents()->SetAudioMuted(muted);
+  }
+}
+
+NE_EXPORT bool ne_tab_is_audible(ne_tab* tab) {
+  return tab && tab->impl->web_contents() &&
+         tab->impl->web_contents()->IsCurrentlyAudible();
+}
+
+NE_EXPORT void ne_tab_media_control(ne_tab* tab, int32_t control) {
+  if (!tab || !tab->impl->web_contents()) {
+    return;
+  }
+  content::MediaSession* session =
+      content::MediaSession::Get(tab->impl->web_contents());
+  if (control == NE_MEDIA_PAUSE) {
+    session->Suspend(content::MediaSession::SuspendType::kUI);
+  } else if (control == NE_MEDIA_RESUME) {
+    session->Resume(content::MediaSession::SuspendType::kUI);
   }
 }
 

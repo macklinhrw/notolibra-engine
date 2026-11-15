@@ -218,7 +218,10 @@ typedef enum ne_eval_reason {
   NE_EVAL_TEST = 2,                   /* hidden checks only */
 } ne_eval_reason;
 
-/* `result_json` is the JSON of the completion value, or NULL on error. */
+/* `result_json` is the JSON of the completion value, or NULL on error. `done`
+ * is called exactly once: NE_OK with the result, or NE_ERR_GONE when the
+ * frame or its renderer goes away before the script runs. A page whose main
+ * thread is busy answers only when it frees up. */
 typedef void (*ne_eval_fn)(void* user_data, ne_status status,
                            const char* result_json);
 NE_EXPORT void ne_tab_eval(ne_tab* tab, ne_string_view script,
@@ -374,6 +377,10 @@ typedef enum ne_input_kind {
   NE_INPUT_KEY_DOWN = 6,
   NE_INPUT_KEY_UP = 7,
   NE_INPUT_CHAR = 8,
+  /* A trackpad pinch at (x, y): `phase` 1 begins it, 2 updates it by the
+   * factor in `delta_x` (1.1 is 10% larger), 3 ends it. Chrome's pinch: the
+   * page sees ctrl+wheel first, else its visual viewport zooms. */
+  NE_INPUT_PINCH = 9,
 } ne_input_kind;
 
 typedef struct ne_input_event {
@@ -686,6 +693,27 @@ NE_EXPORT double ne_tab_get_zoom(ne_tab* tab);
 
 /* A tab's id: stable, never reused, and usable on any thread. */
 NE_EXPORT uint64_t ne_tab_id(ne_tab* tab);
+
+/* Phase 1 (October 30, 2026): sound, for the app's Audio panel. */
+
+/* Mutes or unmutes everything the tab plays, in the browser process
+ * (WebContents::SetAudioMuted, Chrome's "Mute site"): media elements, Web
+ * Audio and plugins alike. Nothing the page does unmutes it, and it lasts
+ * across navigations until the app unmutes the tab. */
+NE_EXPORT void ne_tab_set_audio_muted(ne_tab* tab, bool muted);
+
+/* Whether the tab is making sound now (WebContents::IsCurrentlyAudible,
+ * Chrome's speaker icon), whatever its source. */
+NE_EXPORT bool ne_tab_is_audible(ne_tab* tab);
+
+typedef enum ne_media_control {
+  NE_MEDIA_PAUSE = 1,
+  NE_MEDIA_RESUME = 2,
+} ne_media_control;
+
+/* Pauses or resumes the tab's media session (its playing media elements),
+ * as Chrome's media controls do: MediaSession::Suspend/Resume from the UI. */
+NE_EXPORT void ne_tab_media_control(ne_tab* tab, int32_t control);
 
 typedef enum ne_filter_decision {
   NE_FILTER_ALLOW = 0,

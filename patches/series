@@ -26,3 +26,10 @@ embedder-keychain/components-os_crypt-common-BUILD.gn.patch
 embedder-sandbox-path/content-browser-sandbox_parameters_mac.mm.patch
 nonbundled-ffmpeg-rpath/build-config-mac-BUILD.gn.patch
 embedder-compositor-frames/components-viz-service-display_embedder-skia_output_device_buffer_queue.cc.patch
+blink-drop-shadow-colour-spaces/third_party-blink-renderer-core-animation-interpolable_filter.h.patch
+blink-drop-shadow-colour-spaces/third_party-blink-renderer-core-animation-css_filter_list_interpolation_type.cc.patch
+v8-cppgc-free-list-slow-check/v8-src-heap-cppgc-internal-free-list.cc.patch
+blink-svg-mixed-compositor-properties/third_party-blink-renderer-core-animation-compositor_animations.cc.patch
+audio-mute-keeps-stream/services-audio-output_controller.h.patch
+audio-mute-keeps-stream/services-audio-output_controller.cc.patch
+audio-mute-keeps-stream/services-audio-output_controller_unittest.cc.patch

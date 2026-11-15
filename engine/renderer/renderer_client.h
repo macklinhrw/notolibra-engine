@@ -8,11 +8,12 @@
 
 namespace notolibra {
 
-// The renderer process's embedder: one FrameAgent per frame, and error
-// pages from the browser (FrameAgent::SetErrorPage) rather than content's
-// empty white one.
+// The renderer process's embedder: the app's isolated world, one FrameAgent
+// per frame, and error pages from the browser (FrameAgent::SetErrorPage)
+// rather than content's empty white one.
 class RendererClient : public content::ContentRendererClient {
  public:
+  void RenderThreadStarted() override;
   void RenderFrameCreated(content::RenderFrame* render_frame) override;
   void PrepareErrorPage(
       content::RenderFrame* render_frame,

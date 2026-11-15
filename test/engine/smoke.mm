@@ -3,8 +3,13 @@
 //
 // Hidden smoke check of NotolibraEngine.framework from a plain AppKit host
 // (no gpui): init inside -[NSApplication run], attach mode, a tab, frames as
-// IOSurfaces, navigation callbacks, script, JavaScript dialogs and a
-// permission prompt as data. No windows; activation policy "prohibited".
+// IOSurfaces, navigation callbacks, script, JavaScript dialogs, a
+// permission prompt as data, closing a tab while it plays sound, a
+// drop-shadow animating between colour spaces, the app's scripts on a page
+// requiring Trusted Types, an SVG shape animating opacity with scale, and a
+// script whose renderer dies before it runs (answered NE_ERR_GONE). No windows; activation
+// policy "prohibited"; audio goes to a fake output (--disable-audio-output),
+// so nothing is heard.
 //
 //   test/engine/run_smoke [out_dir]
 // Prints PASS/FAIL lines and a summary; exits non-zero on failure.
@@ -20,7 +25,9 @@
 #include "ne_engine.h"
 
 static ne_app* g_app;
+static ne_window* g_window;
 static ne_tab* g_tab;
+static ne_tab* g_audio_tab;
 static int g_frames;
 static uint64_t g_last_frame;
 static size_t g_frame_w, g_frame_h;
@@ -72,6 +79,9 @@ static void OnNav(void*, ne_tab*, ne_string_view url, ne_string_view title, bool
 
 static std::string g_eval;
 static void OnEval(void*, ne_status status, const char* json) { g_eval = json ? json : "(null)"; }
+static int g_gone_calls;
+static ne_status g_gone_status;
+static void OnGone(void*, ne_status status, const char*) { g_gone_calls++; g_gone_status = status; }
 
 static void Step(int n);
 
@@ -147,6 +157,100 @@ static void Step(int n) {
       Check(g_eval.rfind("\"hi|1|", 0) == 0, "input-keys-click", g_eval);
       Check(g_eval.find("|0|") == std::string::npos && g_eval.find('|') != std::string::npos, "input-wheel", g_eval);
       Check(g_eval.find("|denied\"") != std::string::npos, "permission-answer", g_eval);
+      // A tab that plays sound. Closing it used to crash: the closing
+      // WebContents reported its audio stopping to the half-destroyed Tab
+      // (October 21, 2026, a Twitch tab).
+      const char* audio =
+          "data:text/html,<title>audio</title><script>"
+          "window.ctx = new AudioContext(); const o = ctx.createOscillator(); const g = ctx.createGain();"
+          "g.gain.value = 0.2; o.connect(g).connect(ctx.destination); o.start();</script>";
+      ne_tab_config audio_config = {sizeof(ne_tab_config)};
+      audio_config.url = View(audio);
+      ne_tab_create(g_window, &audio_config, &g_audio_tab);
+      ne_tab_set_view_size(g_audio_tab, 400, 300, 2);
+      After(2.0, 8);
+      return;
+    }
+    case 8:
+      g_eval.clear();
+      ne_tab_eval(g_audio_tab, View("window.ctx.state + '|' + (window.ctx.currentTime > 0.5)"), NE_EVAL_TEST, OnEval, nullptr);
+      After(0.4, 9);
+      return;
+    case 9:
+      Check(g_eval == "\"running|true\"", "audio-plays", g_eval);
+      ne_tab_close(g_audio_tab);
+      g_audio_tab = nullptr;
+      After(0.5, 10);
+      return;
+    case 10:
+      Check(true, "close-audible-tab");
+      // A drop-shadow filter animating between colours in different colour
+      // spaces (rgb and oklch). Blink's filter list didn't bring the two
+      // colours into one space, which a development build's DCHECK stops
+      // the renderer on (October 21, 2026: delta.dev crashed every load).
+      {
+        const char* shadow =
+            "data:text/html,<title>shadow</title><style>"
+            "div{width:80px;height:80px;background:teal;animation:a .3s linear infinite alternate}"
+            "@keyframes a{from{filter:drop-shadow(0 0 4px rgb(255 0 0))}to{filter:drop-shadow(0 0 8px oklch(70%25 0.2 30))}}"
+            "</style><div></div>";
+        ne_tab_load(g_tab, View(shadow));
+      }
+      After(1.5, 11);
+      return;
+    case 11:
+      g_eval = "(none)";
+      ne_tab_eval(g_tab, View("document.title + ':' + getComputedStyle(document.querySelector('div')).filter.slice(0, 11)"), NE_EVAL_TEST, OnEval, nullptr);
+      After(1.0, 12);
+      return;
+    case 12:
+      Check(g_eval == "\"shadow:drop-shadow\"", "drop-shadow-colour-spaces", g_eval);
+      // A page that requires Trusted Types (as Gmail does): the app's world
+      // has a policy of its own, so its scripts may still set innerHTML.
+      ne_tab_load(g_tab, View("data:text/html,<meta http-equiv=\"Content-Security-Policy\" content=\"require-trusted-types-for 'script'\"><title>tt</title><p>page</p>"));
+      After(1.0, 13);
+      return;
+    case 13:
+      g_eval = "(none)";
+      ne_tab_eval_in_frame(g_tab, 0, View("try { document.body.innerHTML = '<b>app</b>'; document.body.textContent } catch (e) { String(e) }"), NE_WORLD_APP, OnEval, nullptr);
+      After(0.5, 14);
+      return;
+    case 14:
+      Check(g_eval == "\"app\"", "app-world-trusted-types", g_eval);
+      // An SVG shape animating opacity with scale: some of its properties
+      // composited, others not, which a development build's DCHECK stopped
+      // the renderer on (October 22, 2026: dpm.lol crashed every visit).
+      {
+        const char* svg =
+            "data:text/html,<title>svg</title><style>"
+            "rect{animation:a .6s ease-in-out infinite alternate;transform-origin:center;transform-box:fill-box}"
+            "@keyframes a{from{opacity:.2;scale:.6}to{opacity:1;scale:1}}"
+            "</style><svg width=200 height=200><rect x=20 y=20 width=60 height=60 fill=teal></rect><rect x=110 y=20 width=60 height=60 fill=teal style=\"animation-delay:.2s\"></rect></svg>";
+        ne_tab_load(g_tab, View(svg));
+      }
+      After(2.0, 16);
+      return;
+    case 16:
+      g_eval = "(none)";
+      ne_tab_eval(g_tab, View("document.title + ':' + document.getAnimations().length"), NE_EVAL_TEST, OnEval, nullptr);
+      After(0.5, 17);
+      return;
+    case 17:
+      Check(g_eval == "\"svg:2\"", "svg-mixed-compositor-properties", g_eval);
+      // A script whose renderer goes away before it answers: `done` must
+      // still be called once, with NE_ERR_GONE. Chromium drops such a
+      // callback unrun, which left the app waiting out its timeout
+      // (October 22, 2026, a renderer stuck in a debug-build heap check).
+      // The renderer handles chrome://kill itself, in order on the frame's
+      // pipe, so the script queued behind it never runs.
+      g_gone_calls = 0;
+      ne_tab_load(g_tab, View("chrome://kill"));
+      ne_tab_eval_in_frame(g_tab, 0, View("1"), NE_WORLD_APP, OnGone, nullptr);
+      After(1.5, 15);
+      return;
+    case 15: {
+      Check(g_gone_calls == 1 && g_gone_status == NE_ERR_GONE, "eval-renderer-gone",
+            "calls=" + std::to_string(g_gone_calls) + " status=" + std::to_string(g_gone_status));
       double t = Now();
       ne_app_try_terminate(g_app, nullptr, nullptr);
       printf("shutdown_s=%.2f\n", Now() - t);
@@ -165,11 +269,11 @@ static void Step(int n) {
   g_start_s = Now();
   printf("engine %s, api %d\n", ne_chromium_version(), ne_api_version());
   std::string profile = std::string(getenv("TMPDIR") ?: "/tmp/") + "nl-engine-smoke-profile";
-  const char* argv[] = {"--enable-logging=stderr"};
+  const char* argv[] = {"--enable-logging=stderr", "--disable-audio-output", "--autoplay-policy=no-user-gesture-required"};
   ne_app_config config = {sizeof(ne_app_config)};
   config.api_version = NE_API_VERSION;
   config.user_data_dir = {profile.data(), profile.size()};
-  config.argc = 1;
+  config.argc = 3;
   config.argv = argv;
   double t = Now();
   ne_status status = ne_app_init(&config, &g_app);
@@ -182,8 +286,7 @@ static void Step(int n) {
   ne_app_set_ui_delegate(g_app, &delegate);
   ne_profile_open(g_app, View("Default"), [](void*, ne_status status, ne_profile* profile) {
     Check(status == NE_OK && profile, "profile-open");
-    ne_window* window = nullptr;
-    ne_window_create(profile, nullptr, &window);
+    ne_window_create(profile, nullptr, &g_window);
     const char* html =
         "data:text/html,<title>smoke</title><style>@keyframes s{to{transform:rotate(360deg)}}"
         "div{width:80px;height:80px;background:teal;animation:s 1s linear infinite}</style>"
@@ -191,7 +294,7 @@ static void Step(int n) {
         "<div style='margin-top:60px'></div><div style='height:3000px'></div><script>window.clicks=0</script>";
     ne_tab_config tab_config = {sizeof(ne_tab_config)};
     tab_config.url = View(html);
-    ne_tab_create(window, &tab_config, &g_tab);
+    ne_tab_create(g_window, &tab_config, &g_tab);
     ne_tab_set_view_size(g_tab, 800, 600, 2);
     ne_presenter presenter = {sizeof(ne_presenter)};
     presenter.on_frame = OnFrame;

@@ -3,9 +3,32 @@
 
 #include "notolibra/engine/renderer/renderer_client.h"
 
+#include "content/public/common/isolated_world_ids.h"
 #include "notolibra/engine/renderer/frame_agent.h"
+#include "third_party/blink/public/platform/web_isolated_world_info.h"
+#include "third_party/blink/public/platform/web_security_origin.h"
+#include "third_party/blink/public/platform/web_string.h"
+#include "third_party/blink/public/platform/web_url.h"
+#include "url/gurl.h"
 
 namespace notolibra {
+
+void RendererClient::RenderThreadStarted() {
+  // The app's world (NE_WORLD_APP) gets a policy of its own, permissive, as
+  // Chrome gives extensions' content scripts one: without it it inherits the
+  // page's, so a page enforcing Trusted Types (Gmail, YouTube) made the
+  // app's scripts throw on their first innerHTML. A policy needs an origin;
+  // an opaque one grants nothing: fetches and XHRs from the world still go
+  // out as the page's origin, as before.
+  blink::WebIsolatedWorldInfo info;
+  info.security_origin =
+      blink::WebSecurityOrigin::Create(blink::WebURL(GURL("data:,")));
+  // Non-empty: an empty WebString is null, which clears the policy.
+  info.content_security_policy = blink::WebString::FromUtf8(
+      "default-src * data: blob: 'unsafe-inline' 'unsafe-eval'");
+  info.human_readable_name = blink::WebString::FromUtf8("Notolibra");
+  blink::SetIsolatedWorldInfo(content::ISOLATED_WORLD_ID_CONTENT_END, info);
+}
 
 void RendererClient::RenderFrameCreated(content::RenderFrame* render_frame) {
   new FrameAgent(render_frame);  // Deletes itself (OnDestruct).

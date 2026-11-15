@@ -1,0 +1,46 @@
+Reason: CompositorPropertyAnimationsHaveNoEffect DCHECKs that an element's
+animated properties are either all composited or all missing. An SVG shape
+animating opacity with the CSS scale property (dpm.lol's loading logo,
+<rect class="logo-loader-tile">, October 22, 2026) gets a transform node but
+no effect node, so the DCHECK failed and stopped development builds'
+renderers on every visit ("This page crashed"). Release builds skip the
+DCHECK and return true (the animation runs on the main thread); this patch
+keeps that and drops the DCHECK. Upstream main has the same DCHECK
+(checked 2026-10-22). test/engine/smoke.mm: svg-mixed-compositor-properties.
+
+diff --git a/third_party/blink/renderer/core/animation/compositor_animations.cc b/third_party/blink/renderer/core/animation/compositor_animations.cc
+index 7a3d5849bf..a16d7d28df 100644
+--- a/third_party/blink/renderer/core/animation/compositor_animations.cc
++++ b/third_party/blink/renderer/core/animation/compositor_animations.cc
+@@ -532,7 +532,6 @@ bool CompositorAnimations::CompositorPropertyAnimationsHaveNoEffect(
+   }
+ 
+   bool any_compositor_properties_missing = false;
+-  bool any_compositor_properties_present = false;
+ 
+   const auto& keyframe_effect = To<KeyframeEffectModelBase>(effect);
+   const auto& groups = keyframe_effect.GetPropertySpecificKeyframeGroups();
+@@ -555,9 +554,7 @@ bool CompositorAnimations::CompositorPropertyAnimationsHaveNoEffect(
+             CompositorAnimations::CompositorElementNamespaceForProperty(
+                 property.GetCSSProperty().PropertyID()));
+     DCHECK(target_element_id);
+-    if (paint_artifact_compositor->HasComposited(target_element_id))
+-      any_compositor_properties_present = true;
+-    else
++    if (!paint_artifact_compositor->HasComposited(target_element_id))
+       any_compositor_properties_missing = true;
+   }
+ 
+@@ -568,8 +565,10 @@ bool CompositorAnimations::CompositorPropertyAnimationsHaveNoEffect(
+   if (any_compositor_properties_missing) {
+     // Because we're only considering properties that are animated on this
+     // element, we should either have all properties or be missing all
+-    // properties.
+-    DCHECK(!any_compositor_properties_present);
++    // properties. Not always: an SVG shape animating `opacity` with `scale`
++    // (dpm.lol's loading logo) gets a transform node but no effect node.
++    // Release builds return true here, and the animation runs on the main
++    // thread; the DCHECK stopped development builds' renderers.
+     return true;
+   }
+ 

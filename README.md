@@ -100,7 +100,11 @@ Current series:
 | `embedder-keychain` | `components/os_crypt/common/BUILD.gn` | `ALLOW_RUNTIME_CONFIGURABLE_KEY_STORAGE`, so the engine names its own Safe Storage keychain item. |
 | `embedder-sandbox-path` | `content/browser/sandbox_parameters_mac.mm` | When the framework is outside the host app's bundle, the Seatbelt profile's bundle path is the framework's folder. |
 | `nonbundled-ffmpeg-rpath` | `build/config/mac/BUILD.gn` | FFmpeg is a shared library in every build, so non-component builds (`release_test`) give binaries the component build's rpaths; build tools such as `v8_context_snapshot_generator` load it. |
+| `blink-drop-shadow-colour-spaces` | `interpolable_filter.h`, `css_filter_list_interpolation_type.cc` (Blink animation) | A `drop-shadow()` filter animating between colours in different colour spaces (delta.dev's logo: `#0000` to `oklch(59% .185 32)`) interpolated them unaligned and failed `InterpolableColor`'s DCHECK, stopping development builds' renderers on every load (October 21, 2026). The filter list now brings each pair of drop-shadow colours into one space, as box-shadow already does. `test/engine/run_smoke` checks it (`drop-shadow-colour-spaces`). |
+| `blink-svg-mixed-compositor-properties` | `compositor_animations.cc` (Blink animation) | An SVG shape animating `opacity` with `scale` (dpm.lol's loading logo) gets a compositor transform node but no effect node, which `CompositorPropertyAnimationsHaveNoEffect`'s DCHECK forbids, stopping development builds' renderers on every visit ("This page crashed", October 22, 2026). Release builds skip the DCHECK and run the animation on the main thread; the patch drops the DCHECK and keeps that. Upstream main still has it. `test/engine/run_smoke` checks it (`svg-mixed-compositor-properties`). |
+| `v8-cppgc-free-list-slow-check` | V8 `src/heap/cppgc-internal/free-list.cc` (`Repo: v8`) | `FreeList::Append` checked the list's size by walking every entry on each append (once per swept page), quadratic in builds with DCHECKs, where `dcheck_always_on` defines V8's `DEBUG`. On lol.ps, which animates and churns Blink's heap, a development build's renderer spent minutes in one sweep (100% CPU, 4.7 GB) and never ran the app's scripts (October 22, 2026). The check now needs V8's slow DCHECKs (`v8_enable_slow_dchecks`), like `remembered-set.cc`'s. |
 | `embedder-compositor-frames` | `skia_output_device_buffer_queue.cc` | Without remote Core Animation, macOS gets five root buffers instead of three (pending swaps stay at two): the app shows each buffer itself, so it can fall three frames behind before one it shows is drawn into again. |
+| `audio-mute-keeps-stream` | `services/audio/output_controller.{h,cc}`, `output_controller_unittest.cc` | Tab mute (the app's Audio panel) swapped each output stream for a fake one and back; video follows the audio clock, so a playing video froze or skipped a frame on every mute and unmute (November 1, 2026). A muted stream now keeps playing at volume 0. Upstream main still swaps streams. |
 
 ## Frames
 
@@ -180,6 +184,12 @@ the main frame's content lies over a cross-site frame, the browser asks the
 main frame's renderer what is under the pointer, so on a busy page events
 there can arrive a little late, as in Chrome. The app's check:
 `NOTOLIBRA_ENGINE_UI_TEST=1` (native/README.md).
+
+A trackpad pinch (`NE_INPUT_PINCH`, October 28, 2026: begin, updates by a
+scale factor in `delta_x`, end) goes to the view's `PinchEvent` as the
+touchpad gesture events `-magnifyWithEvent:` builds in Chrome, so the page
+hears ctrl+wheel first and otherwise its visual viewport zooms, past Chrome's
+threshold. The app's check: `NOTOLIBRA_PINCH_TEST=1` (native/README.md).
 
 ## Drags
 
@@ -301,6 +311,27 @@ between a page's `<script>` elements). To an older engine the separator is
 a comment, and the parts run as one script. Until October 19, 2026 they
 always ran as one: Dark Reader's part ended in an unterminated call, so a
 part after it was parsed as a call of its result and threw.
+
+## The app's world
+
+The app's scripts (`ne_tab_eval_in_frame` with `NE_WORLD_APP`,
+`content::ISOLATED_WORLD_ID_CONTENT_END`) run in an isolated world with a
+policy of its own, set once per renderer process
+(`RendererClient::RenderThreadStarted`, `blink::SetIsolatedWorldInfo`), as
+Chrome gives extensions' content scripts: permissive (`default-src * data:
+blob: 'unsafe-inline' 'unsafe-eval'`), with an opaque origin, which grants
+nothing (a world's origin only adds to what its fetches and XHRs may read;
+they still go out as the page's). Without a policy the world took the
+page's, so on a page requiring Trusted Types (Gmail, YouTube) the app's
+first `innerHTML` threw: until October 22, 2026, saving a Gmail message as a
+note failed. `test/engine/run_smoke` checks it
+(`app-world-trusted-types`).
+
+Each eval's `done` is called exactly once: with the result, or
+`NE_ERR_GONE` when Chromium drops the callback unrun because the frame or
+its renderer went away (`EvalReply` in `engine/tab.mm`). Before October 22,
+2026 a dropped callback was never answered, and the app waited out its
+timeout. `run_smoke` checks it (`eval-renderer-gone`).
 
 ## Importing cookies and local storage
 

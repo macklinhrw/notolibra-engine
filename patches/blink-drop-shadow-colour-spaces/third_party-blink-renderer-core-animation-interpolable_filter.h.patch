@@ -1,0 +1,17 @@
+Blink's filter list interpolation didn't bring drop-shadow colours into one colour space (box-shadow's does, InterpolableShadow::MaybeMergeSingles), so a drop-shadow animating between colours in different spaces (rgb and oklch) interpolated mismatched colours and failed InterpolableColor's DCHECK, stopping the renderer in development builds (delta.dev, October 21, 2026). test/engine/smoke.mm: drop-shadow-colour-spaces.
+
+diff --git a/third_party/blink/renderer/core/animation/interpolable_filter.h b/third_party/blink/renderer/core/animation/interpolable_filter.h
+index f59125420d..7037552463 100644
+--- a/third_party/blink/renderer/core/animation/interpolable_filter.h
++++ b/third_party/blink/renderer/core/animation/interpolable_filter.h
+@@ -44,6 +44,10 @@ class CORE_EXPORT InterpolableFilter final : public InterpolableValue {
+ 
+   FilterOperation::OperationType GetType() const { return type_; }
+ 
++  // The filter's own interpolable value (for a drop-shadow, its
++  // InterpolableShadow).
++  InterpolableValue& Value() { return *value_; }
++
+   // Convert this InterpolableFilter back into a FilterOperation class, usually
+   // to be applied to the style after interpolating |this|.
+   FilterOperation* CreateFilterOperation(const StyleResolverState&) const;

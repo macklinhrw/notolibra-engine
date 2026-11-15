@@ -1,0 +1,37 @@
+Reason: cppgc's FreeList::Append checked, in every build with DCHECKs, that the
+list's size after an append is the sum of both lists' sizes. FreeList::Size
+walks every entry, and the sweeper appends once per swept page, so a sweep
+of a large heap is quadratic. In the development engine (dcheck_always_on,
+which defines V8's DEBUG) a page that animates and churns Blink's heap
+(lol.ps, October 22, 2026) kept its renderer's main thread inside one
+sweep: 100% CPU, 4.7 GB, and the app's scripts in the page never ran (the
+chat's read_tab gave up after 20 s). The check now runs only with V8's
+slow DCHECKs (ENABLE_SLOW_DCHECKS, v8_enable_slow_dchecks), as
+remembered-set.cc's whole-set check already does.
+Repo: v8
+
+diff --git a/src/heap/cppgc-internal/free-list.cc b/src/heap/cppgc-internal/free-list.cc
+index 9e2f9bff..a15c7b3d 100644
+--- a/src/heap/cppgc-internal/free-list.cc
++++ b/src/heap/cppgc-internal/free-list.cc
+@@ -103,7 +103,10 @@ std::pair<Address, Address> FreeList::AddReturningUnusedBounds(Block block) {
+ 
+ void FreeList::Append(FreeList&& other) {
+   DCHECK_NE(this, &other);
+-#if DEBUG
++  // Size() walks every entry: checking it on each append is quadratic in
++  // the free list's length (one append per swept page), so it is a slow
++  // check.
++#if defined(ENABLE_SLOW_DCHECKS)
+   const size_t expected_size = Size() + other.Size();
+ #endif
+   // Newly created entries get added to the head.
+@@ -124,7 +127,7 @@ void FreeList::Append(FreeList&& other) {
+   biggest_free_list_index_ =
+       std::max(biggest_free_list_index_, other.biggest_free_list_index_);
+   other.biggest_free_list_index_ = 0;
+-#if DEBUG
++#if defined(ENABLE_SLOW_DCHECKS)
+   DCHECK_EQ(expected_size, Size());
+ #endif
+   DCHECK(other.IsEmpty());
